@@ -2,7 +2,7 @@ import os
 import time
 import logging
 from gmail_poller import poll_gmail
-from sms_handler import poll_sms_replies
+from twilio_handler import poll_sms_replies
 from scheduler import run_scheduled_tasks
 
 logging.basicConfig(
