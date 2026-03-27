@@ -53,7 +53,10 @@ def send_sms(to, body):
         logger.info(f"SMS sent to {to}: SID {message.sid}")
         return message.sid
     except TwilioRestException as e:
-        logger.error(f"Twilio error sending to {to}: {e}")
+        if e.code == 63038 or getattr(e, 'status', None) == 429:
+            logger.warning(f"Twilio daily SMS limit reached (429) — SMS to {to} not sent. Will retry next day.")
+        else:
+            logger.error(f"Twilio error sending to {to}: {e}")
         return None
 
 def send_owner_confirmation_request(pending_id, booking_data):
@@ -219,11 +222,17 @@ def process_single_sms_webhook(from_number, body_text, message_sid):
                 _dv.strptime(cancel_date, '%Y-%m-%d')
                 handle_owner_day_cancellation(cancel_date, cancel_reason)
             except ValueError:
-                send_sms(os.environ['OWNER_MOBILE'],
-                    f"Invalid date format. Use: CANCEL DATE YYYY-MM-DD reason")
+                try:
+                    send_sms(os.environ['OWNER_MOBILE'],
+                        f"Invalid date format. Use: CANCEL DATE YYYY-MM-DD reason")
+                except Exception as e:
+                    logger.error(f"Could not send format error reply: {e}")
         else:
-            send_sms(os.environ['OWNER_MOBILE'],
-                "Usage: CANCEL DATE YYYY-MM-DD reason (e.g. CANCEL DATE 2026-04-15 sick day)")
+            try:
+                send_sms(os.environ['OWNER_MOBILE'],
+                    "Usage: CANCEL DATE YYYY-MM-DD reason (e.g. CANCEL DATE 2026-04-15 sick day)")
+            except Exception as e:
+                logger.error(f"Could not send usage error reply: {e}")
     else:
         handle_owner_correction(pending_id, pending, body_clean)
     state.mark_sms_processed(message_sid)
@@ -293,8 +302,11 @@ def poll_sms_replies():
                         _dv.strptime(cancel_date, '%Y-%m-%d')
                         handle_owner_day_cancellation(cancel_date, cancel_reason)
                     except ValueError:
-                        send_sms(os.environ['OWNER_MOBILE'],
-                            "Invalid date format. Use: CANCEL DATE YYYY-MM-DD reason")
+                        try:
+                            send_sms(os.environ['OWNER_MOBILE'],
+                                "Invalid date format. Use: CANCEL DATE YYYY-MM-DD reason")
+                        except Exception as e:
+                            logger.error(f"Could not send format error reply: {e}")
             else:
                 handle_owner_correction(pending_id, pending, body_clean)
             state.mark_sms_processed(msg.sid)
@@ -349,7 +361,10 @@ def handle_owner_confirm(pending_id, pending):
             label_confirmed(gmail, gmail_msg_id)
         except Exception as e:
             logger.error(f"Label update error on confirm: {e}")
-    send_sms(os.environ['OWNER_MOBILE'], f"Booking {pending_id} confirmed. Calendar event created. Customer notified.")
+    try:
+        send_sms(os.environ['OWNER_MOBILE'], f"Booking {pending_id} confirmed. Calendar event created. Customer notified.")
+    except Exception as e:
+        logger.error(f"Could not send owner confirm ACK for {pending_id}: {e}")
     logger.info(f"Booking {pending_id} fully confirmed")
 
     # Record service history for future maintenance reminders
@@ -404,7 +419,10 @@ def handle_owner_decline(pending_id, pending):
             label_declined(gmail, gmail_msg_id)
         except Exception as e:
             logger.error(f"Label update error on decline: {e}")
-    send_sms(os.environ['OWNER_MOBILE'], f"Booking {pending_id} declined. Customer notified.")
+    try:
+        send_sms(os.environ['OWNER_MOBILE'], f"Booking {pending_id} declined. Customer notified.")
+    except Exception as e:
+        logger.error(f"Could not send owner decline ACK for {pending_id}: {e}")
 
     try:
         state.log_booking_event(pending_id, 'declined', actor='owner_sms',
@@ -485,11 +503,14 @@ def handle_owner_day_cancellation(date_str: str, reason: str) -> None:
             except Exception as e:
                 logger.error(f"Could not email customer for cancelled booking {b['id']}: {e}")
 
-    send_sms(
-        os.environ['OWNER_MOBILE'],
-        f"Day cancellation complete: {len(cancelled)} booking(s) cancelled for {date_str}. "
-        f"{notified} customer(s) notified via SMS. - Rim Repair System"
-    )
+    try:
+        send_sms(
+            os.environ['OWNER_MOBILE'],
+            f"Day cancellation complete: {len(cancelled)} booking(s) cancelled for {date_str}. "
+            f"{notified} customer(s) notified via SMS. - Rim Repair System"
+        )
+    except Exception as e:
+        logger.error(f"Could not send day cancellation summary to owner: {e}")
     logger.info(f"Day cancellation: {len(cancelled)} bookings cancelled for {date_str} (reason: {reason})")
 
 
@@ -532,7 +553,10 @@ def handle_owner_correction(pending_id, pending, correction_text):
     updated_booking = parse_owner_correction(original, correction_text, slot_hint=slot_hint)
     state.update_pending_booking_data(pending_id, updated_booking)
     msg = f"Updated booking:\n\n{format_booking_for_owner(updated_booking)}\n\n[ID:{pending_id}]"
-    send_sms(os.environ['OWNER_MOBILE'], msg)
+    try:
+        send_sms(os.environ['OWNER_MOBILE'], msg)
+    except Exception as e:
+        logger.error(f"Could not send updated booking to owner for {pending_id}: {e}")
     logger.info(f"Booking {pending_id} updated with correction, re-sent for confirmation")
 
     try:

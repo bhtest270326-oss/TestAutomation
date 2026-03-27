@@ -76,12 +76,15 @@ def _alert_owner_overrun(date_str, overrun_jobs):
         f"Please review and reschedule. - Rim Repair System"
     )
     try:
-        send_sms(owner_phone, msg)
-        logger.warning(f"Owner alerted: schedule overrun on {date_str}")
-        try:
-            state.set_app_state(cooldown_key, _perth_now().isoformat())
-        except Exception:
-            pass
+        result = send_sms(owner_phone, msg)
+        if result:
+            logger.warning(f"Owner alerted: schedule overrun on {date_str}")
+            try:
+                state.set_app_state(cooldown_key, _perth_now().isoformat())
+            except Exception:
+                pass
+        else:
+            logger.warning(f"Overrun SMS to owner failed (send_sms returned None) — cooldown not set, will retry")
     except Exception as e:
         logger.error(f"Could not send overrun alert: {e}")
 
