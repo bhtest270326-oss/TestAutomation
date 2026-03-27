@@ -17,6 +17,15 @@ from feature_flags import get_flag
 
 logger = logging.getLogger(__name__)
 
+def _fmt_date(date_str):
+    """Format 'YYYY-MM-DD' as 'Monday, 31 March 2026'. Returns original string on failure."""
+    try:
+        dt = datetime.strptime(date_str, '%Y-%m-%d')
+        return dt.strftime('%A, %d %B %Y').replace(' 0', ' ')
+    except Exception:
+        return date_str
+
+
 def get_twilio_client():
     return Client(os.environ['TWILIO_ACCOUNT_SID'], os.environ['TWILIO_AUTH_TOKEN'])
 
@@ -266,19 +275,19 @@ def handle_owner_correction(pending_id, pending, correction_text):
     logger.info(f"Booking {pending_id} updated with correction, re-sent for confirmation")
 
 def build_customer_confirmation_sms(booking_data):
-    date = booking_data.get('preferred_date', 'TBC')
+    date = _fmt_date(booking_data.get('preferred_date', 'TBC'))
     address = booking_data.get('address') or booking_data.get('suburb', 'your location')
     return (
         f"Hi {booking_data.get('customer_name', 'there')}, your rim repair booking is confirmed for "
-        f"{date} at {address}. Our technician will come to you — payment by EFTPOS on the day. "
-        f"Any questions, just reply. - Rim Repair"
+        f"{date} at {address}. Our technician will come to you — you'll receive a reminder on the morning with your time window. "
+        f"Payment by EFTPOS on the day. Any questions, just reply. - Rim Repair"
     )
 
 def send_confirmation_email(to_email, booking_data):
     try:
         service = get_gmail_service()
         name = booking_data.get('customer_name', 'there')
-        date = booking_data.get('preferred_date', 'TBC')
+        date = _fmt_date(booking_data.get('preferred_date', 'TBC'))
         address = booking_data.get('address') or booking_data.get('suburb', 'your location')
         vehicle = ' '.join(filter(None, [
             booking_data.get('vehicle_colour'),
