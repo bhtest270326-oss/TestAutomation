@@ -61,6 +61,56 @@ def send_owner_confirmation_request(pending_id, booking_data):
     msg += f"\n\n[ID:{pending_id}]"
     send_sms(os.environ['OWNER_MOBILE'], msg)
 
+def process_single_sms_webhook(from_number, body_text, message_sid):
+    """Process one inbound SMS delivered via Twilio webhook (replaces polling for that message)."""
+    state = StateManager()
+
+    if state.is_sms_processed(message_sid):
+        return
+
+    owner_mobile = normalise_phone(os.environ.get('OWNER_MOBILE', ''))
+    if normalise_phone(from_number) != owner_mobile:
+        state.mark_sms_processed(message_sid)
+        return
+
+    body = body_text.strip()
+    logger.info(f"Owner SMS (webhook): {body}")
+
+    pending_id = None
+    if '[ID:' in body:
+        try:
+            pending_id = body.split('[ID:')[1].split(']')[0].strip()
+            body_clean = body.split('[ID:')[0].strip()
+        except Exception:
+            body_clean = body
+    else:
+        body_clean = body
+        latest = state.get_latest_pending_booking()
+        if latest:
+            pending_id = latest['id']
+
+    if not pending_id:
+        logger.warning("Owner webhook SMS received but no pending booking found")
+        state.mark_sms_processed(message_sid)
+        return
+
+    pending = state.get_pending_booking(pending_id)
+    if not pending:
+        logger.warning(f"No pending booking for ID {pending_id}")
+        state.mark_sms_processed(message_sid)
+        return
+
+    upper = body_clean.upper().strip()
+    if upper == 'YES':
+        handle_owner_confirm(pending_id, pending)
+    elif upper == 'NO':
+        handle_owner_decline(pending_id, pending)
+    else:
+        handle_owner_correction(pending_id, pending, body_clean)
+
+    state.mark_sms_processed(message_sid)
+
+
 def poll_sms_replies():
     try:
         client = get_twilio_client()

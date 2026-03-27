@@ -1,6 +1,7 @@
 import os
 import base64
 import logging
+from datetime import datetime
 from google_auth import get_gmail_service
 from googleapiclient.errors import HttpError
 from ai_parser import extract_booking_details, merge_booking_data
@@ -69,12 +70,70 @@ def extract_email_address(from_header):
         return from_header.split('<')[1].split('>')[0].strip()
     return from_header.strip()
 
+def _process_single_message(service, state, msg_id):
+    """Fetch and process one Gmail message by ID. Used by both poll and webhook paths."""
+    if state.is_email_processed(msg_id):
+        return
+
+    try:
+        message = service.users().messages().get(
+            userId='me', id=msg_id, format='full'
+        ).execute()
+    except HttpError as e:
+        logger.error(f"Failed to fetch message {msg_id}: {e}")
+        return
+
+    # Only process inbox messages
+    label_ids = message.get('labelIds', [])
+    if 'INBOX' not in label_ids:
+        state.mark_email_processed(msg_id)
+        return
+
+    headers = get_email_headers(message)
+    from_header = headers.get('From', '')
+    subject = headers.get('Subject', '(no subject)')
+    message_id_header = headers.get('Message-ID', '')
+    customer_email = extract_email_address(from_header)
+    body = get_email_body(message)
+    thread_id = message.get('threadId')
+
+    our_email = os.environ.get('GMAIL_ADDRESS', '')
+    if our_email and customer_email.lower() == our_email.lower():
+        state.mark_email_processed(msg_id)
+        return
+
+    if is_automated_email(customer_email, subject, headers):
+        logger.info(f"Skipping automated/bounce email from {customer_email}: {subject}")
+        state.mark_email_processed(msg_id)
+        return
+
+    logger.info(f"Processing email from {customer_email}: {subject} (thread: {thread_id})")
+
+    existing_pending = state.get_pending_booking_by_thread(thread_id) if thread_id else None
+
+    if existing_pending:
+        handle_clarification_reply(
+            service, state, msg_id, thread_id,
+            existing_pending, body, subject, customer_email,
+            message_id_header=message_id_header
+        )
+    elif thread_id and state.thread_has_active_booking(thread_id):
+        logger.info(f"Thread {thread_id} already has an active booking, skipping")
+    else:
+        handle_new_enquiry(
+            service, state, msg_id, thread_id,
+            body, subject, customer_email, message_id_header
+        )
+
+    state.mark_email_processed(msg_id)
+
+
 def poll_gmail():
+    """Fallback full-inbox scan used when Pub/Sub webhooks are not configured."""
     try:
         service = get_gmail_service()
         state = StateManager()
 
-        # Initialise labels — non-blocking, labels are cosmetic only
         try:
             initialise_labels(service)
         except Exception as e:
@@ -82,9 +141,7 @@ def poll_gmail():
 
         try:
             results = service.users().messages().list(
-                userId='me',
-                q='in:inbox',
-                maxResults=20
+                userId='me', q='in:inbox', maxResults=20
             ).execute()
         except Exception as e:
             logger.error(f"Gmail list error: {e}")
@@ -95,59 +152,93 @@ def poll_gmail():
             return
 
         logger.info(f"Checking {len(messages)} inbox messages")
-
         for msg_ref in messages:
-            msg_id = msg_ref['id']
-
-            if state.is_email_processed(msg_id):
-                continue
-
-            message = service.users().messages().get(userId='me', id=msg_id, format='full').execute()
-            headers = get_email_headers(message)
-            from_header = headers.get('From', '')
-            subject = headers.get('Subject', '(no subject)')
-            message_id_header = headers.get('Message-ID', '')
-            customer_email = extract_email_address(from_header)
-            body = get_email_body(message)
-            thread_id = message.get('threadId')
-
-            our_email = os.environ.get('GMAIL_ADDRESS', '')
-            if our_email and customer_email.lower() == our_email.lower():
-                state.mark_email_processed(msg_id)
-                continue
-
-            if is_automated_email(customer_email, subject, headers):
-                logger.info(f"Skipping automated/bounce email from {customer_email}: {subject}")
-                state.mark_email_processed(msg_id)
-                continue
-
-            logger.info(f"Processing email from {customer_email}: {subject} (thread: {thread_id})")
-
-            # Check if this thread already has a pending clarification booking
-            existing_pending = state.get_pending_booking_by_thread(thread_id) if thread_id else None
-
-            if existing_pending:
-                handle_clarification_reply(
-                    service, state, msg_id, thread_id,
-                    existing_pending, body, subject, customer_email,
-                    message_id_header=message_id_header
-                )
-            elif thread_id and state.thread_has_active_booking(thread_id):
-                # Thread already has a queued or confirmed booking — skip to avoid
-                # creating a duplicate while still marking the message processed.
-                logger.info(f"Thread {thread_id} already has an active booking, skipping")
-            else:
-                handle_new_enquiry(
-                    service, state, msg_id, thread_id,
-                    body, subject, customer_email, message_id_header
-                )
-
-            state.mark_email_processed(msg_id)
+            _process_single_message(service, state, msg_ref['id'])
 
     except HttpError as e:
         logger.error(f"Gmail API error: {e}")
     except Exception as e:
         logger.error(f"Gmail poll error: {e}", exc_info=True)
+
+
+def register_gmail_watch():
+    """Register (or renew) a Gmail push notification watch via Pub/Sub.
+
+    Requires PUBSUB_TOPIC_NAME env var.  Stores the returned historyId so
+    process_history_notification() knows where to start.
+    """
+    topic = os.environ.get('PUBSUB_TOPIC_NAME', '')
+    if not topic:
+        logger.info("PUBSUB_TOPIC_NAME not set — Gmail push notifications disabled")
+        return None
+
+    try:
+        service = get_gmail_service()
+        result = service.users().watch(
+            userId='me',
+            body={'labelIds': ['INBOX'], 'topicName': topic}
+        ).execute()
+
+        history_id = str(result.get('historyId', ''))
+        expiry_ms = result.get('expiration', 0)
+        expiry_dt = datetime.fromtimestamp(int(expiry_ms) / 1000).strftime('%Y-%m-%d %H:%M UTC') if expiry_ms else 'unknown'
+
+        state = StateManager()
+        if not state.get_app_state('gmail_history_id'):
+            state.set_app_state('gmail_history_id', history_id)
+
+        logger.info(f"Gmail watch registered — historyId {history_id}, expires {expiry_dt}")
+        return result
+    except Exception as e:
+        logger.error(f"Gmail watch registration failed: {e}")
+        return None
+
+
+def process_history_notification(new_history_id):
+    """Process new Gmail messages since the last stored historyId.
+
+    Called by the /webhook/gmail endpoint when Pub/Sub delivers a notification.
+    """
+    try:
+        service = get_gmail_service()
+        state = StateManager()
+
+        last_id = state.get_app_state('gmail_history_id')
+
+        # Always advance the stored historyId
+        state.set_app_state('gmail_history_id', str(new_history_id))
+
+        if not last_id:
+            logger.warning("No stored historyId — skipping history fetch (will catch up on next notification)")
+            return
+
+        try:
+            history_resp = service.users().history().list(
+                userId='me',
+                startHistoryId=last_id,
+                historyTypes=['messageAdded'],
+                labelId='INBOX'
+            ).execute()
+        except HttpError as e:
+            if 'historyId' in str(e):
+                # History expired — fall back to full scan
+                logger.warning("History expired, falling back to full inbox scan")
+                poll_gmail()
+                return
+            raise
+
+        try:
+            initialise_labels(service)
+        except Exception:
+            pass
+
+        for record in history_resp.get('history', []):
+            for msg_added in record.get('messagesAdded', []):
+                msg_id = msg_added['message']['id']
+                _process_single_message(service, state, msg_id)
+
+    except Exception as e:
+        logger.error(f"History notification processing error: {e}", exc_info=True)
 
 
 def _assign_best_slot(booking_data, state):
