@@ -111,20 +111,22 @@ def _h2(text: str) -> str:
 def _info_row(label: str, value: str) -> str:
     return (
         '<tr>'
-        f'<td style="padding:8px 12px;font-size:14px;color:{MUTED};'
-        f'font-weight:600;white-space:nowrap;width:130px;">{label}</td>'
-        f'<td style="padding:8px 12px;font-size:14px;color:{DARK};">{value}</td>'
+        f'<td style="padding:9px 16px 9px 0;font-size:13px;color:{MUTED};'
+        f'font-weight:600;white-space:nowrap;width:140px;vertical-align:top;'
+        f'border-bottom:1px solid #e2e8f0;text-transform:uppercase;letter-spacing:0.4px;">'
+        f'{label}</td>'
+        f'<td style="padding:9px 0;font-size:14px;color:{DARK};'
+        f'border-bottom:1px solid #e2e8f0;">{value}</td>'
         '</tr>'
     )
 
 
 def _info_table(rows: list[tuple[str, str]]) -> str:
-    """Render a two-column label/value table with a left red accent border."""
+    """Render a two-column label/value table — clean, borderless style."""
     inner = ''.join(_info_row(label, value) for label, value in rows if value)
     return (
         '<table cellpadding="0" cellspacing="0" width="100%" '
-        f'style="border-left:4px solid {RED};border-collapse:collapse;'
-        f'margin:0 0 20px;background:#f8fafc;border-radius:0 4px 4px 0;">'
+        f'style="border-collapse:collapse;margin:0 0 20px;">'
         f'<tbody>{inner}</tbody>'
         '</table>'
     )
