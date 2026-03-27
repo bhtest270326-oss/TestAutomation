@@ -869,7 +869,19 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
                 from ai_parser import format_availability_response
                 from email_utils import send_customer_email as _send_avail
 
-                _next_week_re = re.compile(r'\b(next|following)\s+week\b|\bweek\s+after\b', re.I)
+                # Detect "next week", "following week", "week after", "further out",
+                # "later date", "2 weeks", "fortnight", "in [month name]", etc.
+                _next_week_re = re.compile(
+                    r'\b(next|following)\s+week\b'
+                    r'|\bweek\s+after\b'
+                    r'|\bfortnight\b'
+                    r'|\b\d+\s+weeks?\s+(away|out|time|later)\b'
+                    r'|\bfurther\s+(out|ahead|away|date)\b'
+                    r'|\blater\s+(date|time|in\s+the\s+(month|year))?\b'
+                    r'|\banother\s+(week|time)\b'
+                    r'|\b(january|february|march|april|may|june|july|august|september|october|november|december)\b',
+                    re.I
+                )
                 wants_next_week = bool(_next_week_re.search(body))
 
                 from_date_str = None
