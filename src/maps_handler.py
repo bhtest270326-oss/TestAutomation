@@ -117,11 +117,21 @@ def get_job_duration_minutes(booking_data: dict) -> int:
     return 300 + (n - 4) * 60
 
 
-def get_travel_minutes(origin, destination):
+def get_travel_minutes(origin: str, destination: str, departure_dt=None) -> int:
     """Return driving time in minutes between two addresses.
 
     Appends ', Perth WA, Australia' to help Maps disambiguate suburb-only addresses.
     Falls back to 30 minutes if the API key is missing or the call fails.
+
+    Args:
+        origin:       origin address string.
+        destination:  destination address string.
+        departure_dt: optional timezone-naive datetime (Perth local time) representing
+                      when travel begins.  When provided, the Distance Matrix API is
+                      queried with departure_time and traffic_model='best_guess' so
+                      that real traffic conditions are reflected in the estimate.
+                      The cache key is bucketed to the nearest 15-minute interval to
+                      avoid a cache miss on every call while still being traffic-aware.
     """
     if not GOOGLE_MAPS_API_KEY:
         logger.debug("GOOGLE_MAPS_API_KEY not set — using 30 min default travel time")
@@ -130,16 +140,32 @@ def get_travel_minutes(origin, destination):
     if not origin or not destination:
         return 30
 
+    # Round departure to nearest 15-min bucket for cache key
+    if departure_dt is not None:
+        rounded_min = (departure_dt.minute // 15) * 15
+        dep_key = departure_dt.strftime(f'%Y%m%d%H') + f'{rounded_min:02d}'
+    else:
+        dep_key = 'nodep'
+    cache_key = (origin.lower().strip(), destination.lower().strip(), dep_key)
+
     try:
+        params = {
+            'origins': f"{origin}, Perth WA, Australia",
+            'destinations': f"{destination}, Perth WA, Australia",
+            'key': GOOGLE_MAPS_API_KEY,
+            'mode': 'driving',
+            'region': 'au',
+        }
+        if departure_dt is not None:
+            try:
+                import calendar as _cal
+                params['departure_time'] = str(int(_cal.timegm(departure_dt.timetuple())))
+                params['traffic_model'] = 'best_guess'
+            except Exception:
+                pass  # fall back to no traffic data
         resp = requests.get(
             "https://maps.googleapis.com/maps/api/distancematrix/json",
-            params={
-                'origins': f"{origin}, Perth WA, Australia",
-                'destinations': f"{destination}, Perth WA, Australia",
-                'key': GOOGLE_MAPS_API_KEY,
-                'mode': 'driving',
-                'region': 'au',
-            },
+            params=params,
             timeout=10
         )
         data = resp.json()
@@ -156,7 +182,12 @@ def get_travel_minutes(origin, destination):
         if not elements or elements[0].get('status') != 'OK':
             return 30
 
-        travel_min = int(elements[0]['duration']['value'] / 60) + TRAVEL_BUFFER_MINUTES
+        element = elements[0]
+        # Prefer traffic-aware duration when departure_time was supplied
+        duration_field = (
+            element.get('duration_in_traffic') or element.get('duration')
+        )
+        travel_min = int(duration_field['value'] / 60) + TRAVEL_BUFFER_MINUTES
         logger.info(f"Travel {origin} → {destination}: {travel_min} min")
         return travel_min
 
@@ -372,7 +403,8 @@ def find_next_available_slot(target_date_str, new_address, day_bookings,
 
     if not day_bookings:
         # First job of the day — measure travel from the business address
-        travel_from_base = get_travel_minutes(BUSINESS_ADDRESS, new_address)
+        travel_from_base = get_travel_minutes(BUSINESS_ADDRESS, new_address,
+                                              departure_dt=day_start)
         first_start = _ceil_15(day_start + timedelta(minutes=travel_from_base))
         first_end = first_start + timedelta(minutes=new_job_duration)
         if first_end <= day_end:
@@ -401,12 +433,16 @@ def find_next_available_slot(target_date_str, new_address, day_bookings,
 
         for job_start, job_end, job_addr in existing:
             # Earliest we can start the new job (travel from previous position, rounded up to :00/:15/:30/:45)
-            travel_to_new = get_travel_minutes(prev_addr, new_address)
+            travel_to_new = get_travel_minutes(prev_addr, new_address,
+                                               departure_dt=prev_end)
             earliest = _ceil_15(prev_end + timedelta(minutes=travel_to_new))
             new_job_end = earliest + timedelta(minutes=new_job_duration)
 
             # Travel from new job to the upcoming existing job
-            travel_new_to_next = get_travel_minutes(new_address, job_addr) if (new_address and job_addr) else 30
+            travel_new_to_next = (
+                get_travel_minutes(new_address, job_addr, departure_dt=new_job_end)
+                if (new_address and job_addr) else 30
+            )
 
             # Fits before this existing job AND ends by 5pm?
             if (new_job_end + timedelta(minutes=travel_new_to_next) <= job_start
@@ -418,7 +454,8 @@ def find_next_available_slot(target_date_str, new_address, day_bookings,
             prev_addr = job_addr
 
         # Try slotting after the last existing job
-        travel_from_last = get_travel_minutes(prev_addr, new_address)
+        travel_from_last = get_travel_minutes(prev_addr, new_address,
+                                              departure_dt=prev_end)
         candidate = _ceil_15(prev_end + timedelta(minutes=travel_from_last))
         candidate_end = candidate + timedelta(minutes=new_job_duration)
 

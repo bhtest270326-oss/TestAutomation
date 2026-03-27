@@ -38,6 +38,22 @@ FLAGS = {
         'Google Sheets sync',
         'Log confirmed bookings to a shared Google Sheet automatically',
     ),
+    'flag_maintenance_reminders': (
+        'Maintenance reminder SMS (6m/12m)',
+        'Send customers an SMS reminder at 6 and 12 months after their service',
+    ),
+    'flag_day_cancellation_auto_notify': (
+        'Auto-notify customers on day cancellation',
+        'Automatically SMS customers when the owner cancels an entire day of bookings',
+    ),
+    'flag_dlq_escalation': (
+        'DLQ escalation emails to owner',
+        'Send owner an email when a message fails processing and lands in the dead-letter queue',
+    ),
+    'flag_preflight_report': (
+        'Pre-flight schedule SMS (6:30am)',
+        "Send the owner a morning summary SMS of the day's bookings at 6:30am",
+    ),
 }
 
 

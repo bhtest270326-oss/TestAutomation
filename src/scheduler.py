@@ -30,13 +30,16 @@ def _perth_now():
 def run_scheduled_tasks():
     """Run all scheduled tasks - call once per main loop iteration."""
     try:
+        check_dlq_for_escalation()
         check_calendar_rsvps()
+        send_preflight_schedule_report()
         send_morning_job_notifications()
         send_day_prior_reminders()
         send_post_job_review_requests()
         optimize_daily_routes()
         check_pending_booking_expiry()
         send_owner_daily_briefing()
+        send_maintenance_reminders()
         backup_database_to_email()
     except Exception as e:
         logger.error(f"Scheduler error: {e}", exc_info=True)
@@ -289,21 +292,21 @@ def _send_morning_email(to_email, booking_data):
     """Send the day-of morning notification email to a customer."""
     try:
         from google_auth import get_gmail_service
-        from email_utils import send_customer_email, _p, _h2, _info_table, _ul, DARK
+        from email_utils import send_customer_email, _p, _h2, _info_table, _ul, DARK, esc
 
         service = get_gmail_service()
 
         name = booking_data.get('customer_name', 'there')
-        first = name.split()[0] if name and name != 'there' else 'there'
+        first = esc(name.split()[0]) if name and name != 'there' else 'there'
         time_str = booking_data.get('preferred_time') or '09:00'
         window = _time_window(time_str)
-        address = booking_data.get('address') or booking_data.get('suburb', 'your location')
-        vehicle = ' '.join(filter(None, [
+        address = esc(booking_data.get('address') or booking_data.get('suburb', 'your location'))
+        vehicle = esc(' '.join(filter(None, [
             booking_data.get('vehicle_year'),
             booking_data.get('vehicle_colour'),
             booking_data.get('vehicle_make'),
             booking_data.get('vehicle_model'),
-        ])) or 'your vehicle'
+        ])) or 'your vehicle')
 
         content = (
             _p(f'Hi {first},')
@@ -546,6 +549,159 @@ def send_owner_daily_briefing():
         logger.info(f"Daily briefing sent for {today}: {len(jobs)} job(s)")
     except Exception as e:
         logger.error(f"Failed to send daily briefing: {e}")
+
+
+def check_dlq_for_escalation():
+    """Email owner when booking extractions have failed 3+ times (DLQ entries)."""
+    try:
+        from state_manager import StateManager
+        state = StateManager()
+        unnotified = state.get_unnotified_dlq_entries()
+        if not unnotified:
+            return
+
+        owner_email = os.environ.get('OWNER_EMAIL', '')
+        if not owner_email:
+            logger.warning("DLQ: OWNER_EMAIL not set — cannot escalate")
+            return
+
+        dlq_lines = '\n'.join([
+            f"  - {r['customer_email']} (failed {r['failure_count']}x, last: {r['last_failed_at'][:16]}, type: {r['error_type']})"
+            for r in unnotified
+        ])
+        body = (
+            f"ALERT: {len(unnotified)} booking enquiry(ies) failed AI extraction 3+ times "
+            f"and were NOT sent to customers:\n\n{dlq_lines}\n\n"
+            f"These customers' emails need manual follow-up. Check Railway logs for details.\n"
+            f"- Rim Repair System"
+        )
+        from email.mime.text import MIMEText
+        import base64
+        from google_auth import get_gmail_service
+        msg = MIMEText(body)
+        msg['to'] = owner_email
+        msg['subject'] = f"[ACTION REQUIRED] {len(unnotified)} Failed Booking Extraction(s)"
+        service = get_gmail_service()
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        service.users().messages().send(userId='me', body={'raw': raw}).execute()
+        for r in unnotified:
+            state.mark_dlq_notified(r['gmail_msg_id'])
+        logger.info(f"DLQ escalation email sent — {len(unnotified)} entries")
+    except Exception as e:
+        logger.error(f"check_dlq_for_escalation failed: {e}", exc_info=True)
+
+
+def send_preflight_schedule_report():
+    """At 06:30 Perth time, SMS owner a pre-flight daily schedule report."""
+    if not get_flag('flag_preflight_report'):
+        return
+    now = _perth_now()
+    if not (now.hour == 6 and 30 <= now.minute < 35):
+        return
+
+    try:
+        from state_manager import StateManager
+        from maps_handler import get_job_duration_minutes, BUSINESS_END_HOUR
+        state = StateManager()
+        today = now.strftime('%Y-%m-%d')
+
+        last = state.get_app_state('last_preflight_report_date')
+        if last == today:
+            return
+
+        confirmed = state.get_confirmed_bookings()
+        today_jobs = []
+        for bid, booking in confirmed.items():
+            if booking.get('status') != 'confirmed':
+                continue
+            bd = booking.get('booking_data', {})
+            if bd.get('preferred_date') != today:
+                continue
+            today_jobs.append((bid, bd))
+
+        state.set_app_state('last_preflight_report_date', today)
+
+        if not today_jobs:
+            send_sms(os.environ['OWNER_MOBILE'], f"Pre-flight {today}: No jobs scheduled today.")
+            return
+
+        today_jobs.sort(key=lambda x: x[1].get('preferred_time', '09:00'))
+
+        issues = []
+        lines = []
+        from datetime import datetime as _dt, timedelta as _td
+        day_end = _dt.strptime(f"{today} {BUSINESS_END_HOUR:02d}:00", "%Y-%m-%d %H:%M")
+        prev_end = _dt.strptime(f"{today} 08:00", "%Y-%m-%d %H:%M")
+
+        for i, (bid, bd) in enumerate(today_jobs):
+            t = bd.get('preferred_time', '09:00')
+            duration = get_job_duration_minutes(bd)
+            customer = (bd.get('customer_name') or '?').split()[0]
+            suburb = bd.get('suburb') or (bd.get('address') or '?').split(',')[0]
+            try:
+                job_start = _dt.strptime(f"{today} {t}", "%Y-%m-%d %H:%M")
+                job_end = job_start + _td(minutes=duration)
+            except Exception:
+                continue
+            if i > 0 and job_start < prev_end:
+                issues.append(f"CONFLICT job {i+1} ({customer}) overlaps previous")
+            if job_end > day_end:
+                issues.append(f"OVERRUN job {i+1} ({customer}) ends {job_end.strftime('%H:%M')}")
+            lines.append(f"{t} {customer} @{suburb} ({duration}m)")
+            prev_end = max(prev_end, job_end)
+
+        header = f"Pre-flight {today} — {len(today_jobs)} job(s)"
+        if issues:
+            header += f" ⚠ {len(issues)} issue(s)"
+        report = header + ":\n" + "\n".join(lines[:5])
+        if issues:
+            report += "\nISSUES:\n" + "\n".join(issues)
+        if len(today_jobs) > 5:
+            report += f"\n...+{len(today_jobs)-5} more"
+
+        send_sms(os.environ['OWNER_MOBILE'], report)
+        logger.info(f"Pre-flight report sent for {today}")
+    except Exception as e:
+        logger.error(f"send_preflight_schedule_report failed: {e}", exc_info=True)
+
+
+def send_maintenance_reminders():
+    """Daily: send 6-month and 12-month maintenance reminder SMS to past customers."""
+    from feature_flags import get_flag
+    if not get_flag('flag_maintenance_reminders'):
+        return
+    try:
+        from state_manager import StateManager
+        state = StateManager()
+        today = _perth_now().strftime('%Y-%m-%d')
+
+        for interval, months in [('6m', 6), ('12m', 12)]:
+            due = state.get_maintenance_reminders_due(today, interval)
+            for row in due:
+                phone = row.get('customer_phone')
+                if not phone:
+                    state.mark_maintenance_reminder_sent(row['id'], interval)
+                    continue
+                vehicle = row.get('vehicle_key', '').replace('_', ' ').title() or 'your vehicle'
+                service = (row.get('service_type') or 'rim repair').replace('_', ' ')
+                if interval == '6m':
+                    msg = (
+                        f"Hi, it's been 6 months since your {service} on {vehicle}. "
+                        f"Time for a check-up? We're here when you need us. - Rim Repair Team"
+                    )
+                else:
+                    msg = (
+                        f"Hi, it's been a year since your {service} on {vehicle}. "
+                        f"Keep it looking its best — reply to book your next service. - Rim Repair Team"
+                    )
+                try:
+                    send_sms(phone, msg)
+                    state.mark_maintenance_reminder_sent(row['id'], interval)
+                    logger.info(f"Maintenance reminder ({interval}) sent to {phone} for booking {row['booking_id']}")
+                except Exception as e:
+                    logger.error(f"Maintenance reminder SMS failed: {e}")
+    except Exception as e:
+        logger.error(f"send_maintenance_reminders failed: {e}", exc_info=True)
 
 
 def backup_database_to_email():

@@ -878,6 +878,131 @@ def api_decline_booking(booking_id):
             return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/booking/<booking_id>/notes', methods=['POST'])
+def api_booking_add_note(booking_id):
+    cfg   = _load_cfg()
+    url   = cfg.get('railway_url', '').strip().rstrip('/')
+    token = cfg.get('admin_token', '').strip()
+    if url:
+        try:
+            import requests as _req
+            qs = f'?token={token}' if token else ''
+            r  = _req.post(f'{url}/admin/api/booking/{booking_id}/notes{qs}',
+                           json=request.get_json(silent=True) or {}, timeout=12)
+            if r.status_code == 200:
+                return jsonify(r.json())
+            return jsonify({'error': f'Railway returned {r.status_code}'}), r.status_code
+        except Exception as e:
+            return jsonify({'error': str(e)}), 502
+    else:
+        try:
+            from state_manager import StateManager
+            data = request.get_json(silent=True) or {}
+            note = (data.get('note') or '').strip()
+            if not note:
+                return jsonify({'error': 'Note text is required'}), 400
+            state = StateManager()
+            state.log_booking_event(booking_id, 'note', actor='owner_ui', details={'text': note})
+            return jsonify({'ok': True})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/booking/<booking_id>/edit', methods=['POST'])
+def api_booking_edit(booking_id):
+    cfg   = _load_cfg()
+    url   = cfg.get('railway_url', '').strip().rstrip('/')
+    token = cfg.get('admin_token', '').strip()
+    if url:
+        try:
+            import requests as _req
+            qs = f'?token={token}' if token else ''
+            r  = _req.post(f'{url}/admin/api/booking/{booking_id}/edit{qs}',
+                           json=request.get_json(silent=True) or {}, timeout=12)
+            if r.status_code == 200:
+                return jsonify(r.json())
+            return jsonify({'error': f'Railway returned {r.status_code}'}), r.status_code
+        except Exception as e:
+            return jsonify({'error': str(e)}), 502
+    else:
+        try:
+            from state_manager import StateManager
+            import json as _json
+            data = request.get_json(silent=True) or {}
+            state = StateManager()
+            with state._conn() as conn:
+                row = conn.execute(
+                    "SELECT booking_data, status FROM bookings WHERE id=?", (booking_id,)
+                ).fetchone()
+            if not row:
+                return jsonify({'error': 'Booking not found'}), 404
+            bd = _json.loads(row['booking_data'])
+            changed = {}
+            for field in ('preferred_date', 'preferred_time', 'address', 'suburb', 'num_rims'):
+                if field in data and data[field] is not None and str(data[field]).strip():
+                    bd[field] = data[field]
+                    changed[field] = data[field]
+            if not changed:
+                return jsonify({'error': 'No valid fields provided'}), 400
+            with state._conn() as conn:
+                conn.execute(
+                    "UPDATE bookings SET booking_data=? WHERE id=?",
+                    (_json.dumps(bd), booking_id)
+                )
+            state.log_booking_event(booking_id, 'fields_edited', actor='owner_ui', details=changed)
+            return jsonify({'ok': True, 'changed': changed})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/booking/<booking_id>/decline-with-reason', methods=['POST'])
+def api_booking_decline_with_reason(booking_id):
+    cfg   = _load_cfg()
+    url   = cfg.get('railway_url', '').strip().rstrip('/')
+    token = cfg.get('admin_token', '').strip()
+    if url:
+        try:
+            import requests as _req
+            qs = f'?token={token}' if token else ''
+            r  = _req.post(f'{url}/admin/api/booking/{booking_id}/decline-with-reason{qs}',
+                           json=request.get_json(silent=True) or {}, timeout=12)
+            if r.status_code == 200:
+                return jsonify(r.json())
+            return jsonify({'error': f'Railway returned {r.status_code}'}), r.status_code
+        except Exception as e:
+            return jsonify({'error': str(e)}), 502
+    else:
+        try:
+            from state_manager import StateManager
+            import json as _json
+            data = request.get_json(silent=True) or {}
+            reason = (data.get('reason') or 'No reason specified').strip()
+            state = StateManager()
+            pending = state.get_pending_booking(booking_id)
+            if not pending:
+                return jsonify({'error': 'Pending booking not found'}), 404
+            state.decline_booking(booking_id)
+            state.log_booking_event(booking_id, 'declined_with_reason', actor='owner_ui',
+                                    details={'reason': reason})
+            bd = pending.get('booking_data', {})
+            if isinstance(bd, str):
+                bd = _json.loads(bd)
+            customer_phone = bd.get('customer_phone')
+            from feature_flags import get_flag
+            if customer_phone and get_flag('flag_auto_sms_customer'):
+                try:
+                    from twilio_handler import send_sms
+                    name = (bd.get('customer_name') or 'there').split()[0]
+                    send_sms(customer_phone,
+                        f"Hi {name}, unfortunately we're unable to accommodate your booking request "
+                        f"at this time. Please contact us if you'd like to discuss alternatives. - Rim Repair Team")
+                except Exception as e:
+                    pass
+            return jsonify({'ok': True})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/analytics')
 def api_analytics():
     cfg   = _load_cfg()

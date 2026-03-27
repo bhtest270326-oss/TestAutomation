@@ -10,6 +10,7 @@ Colour scheme matches the Perth Swedish & European Auto Centre banner:
 import os
 import base64
 import logging
+from html import escape as esc
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 

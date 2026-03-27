@@ -3,7 +3,7 @@ import os
 import uuid
 import sqlite3
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +79,38 @@ def _ensure_schema(conn):
             created_at  TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_events_booking ON booking_events(booking_id);
+
+        CREATE TABLE IF NOT EXISTS failed_extractions (
+            id              TEXT PRIMARY KEY,
+            gmail_msg_id    TEXT NOT NULL UNIQUE,
+            thread_id       TEXT,
+            customer_email  TEXT NOT NULL,
+            raw_body        TEXT,
+            error_type      TEXT,
+            error_message   TEXT,
+            failure_count   INTEGER DEFAULT 1,
+            first_failed_at TEXT NOT NULL,
+            last_failed_at  TEXT NOT NULL,
+            owner_notified  INTEGER DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_dlq_notified ON failed_extractions(owner_notified);
+
+        CREATE TABLE IF NOT EXISTS customer_service_history (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            booking_id          TEXT NOT NULL,
+            customer_phone      TEXT,
+            customer_email      TEXT,
+            vehicle_key         TEXT,
+            service_type        TEXT,
+            completed_date      TEXT,
+            next_reminder_6m    TEXT,
+            next_reminder_12m   TEXT,
+            reminder_6m_sent    INTEGER DEFAULT 0,
+            reminder_12m_sent   INTEGER DEFAULT 0,
+            created_at          TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_svc_history_6m  ON customer_service_history(next_reminder_6m, reminder_6m_sent);
+        CREATE INDEX IF NOT EXISTS idx_svc_history_12m ON customer_service_history(next_reminder_12m, reminder_12m_sent);
     """)
     conn.commit()
 
@@ -177,6 +209,37 @@ def _migrate_from_json(conn):
             pass
 
 
+def _check_time_conflict(conn, preferred_date: str, preferred_time: str,
+                          new_job_duration: int, exclude_booking_id: str = None) -> tuple[bool, str | None]:
+    """Return (has_conflict, conflicting_booking_id) for a proposed time slot."""
+    try:
+        proposed_start = datetime.strptime(f"{preferred_date} {preferred_time}", "%Y-%m-%d %H:%M")
+        proposed_end = proposed_start + timedelta(minutes=new_job_duration)
+
+        rows = conn.execute(
+            "SELECT id, booking_data FROM bookings WHERE status='confirmed' AND preferred_date=?",
+            (preferred_date,)
+        ).fetchall()
+
+        for row in rows:
+            if exclude_booking_id and row['id'] == exclude_booking_id:
+                continue
+            bd = json.loads(row['booking_data'])
+            existing_time = bd.get('preferred_time', '09:00')
+            from maps_handler import get_job_duration_minutes
+            existing_duration = get_job_duration_minutes(bd)
+            existing_start = datetime.strptime(f"{preferred_date} {existing_time}", "%Y-%m-%d %H:%M")
+            existing_end = existing_start + timedelta(minutes=existing_duration)
+            buffer = timedelta(minutes=5)
+            if proposed_start < existing_end + buffer and proposed_end + buffer > existing_start:
+                return (True, row['id'])
+
+        return (False, None)
+    except Exception as e:
+        logger.warning(f"Time conflict check error (failing open): {e}")
+        return (False, None)
+
+
 class StateManager:
     def __init__(self):
         conn = _get_conn()
@@ -239,6 +302,25 @@ class StateManager:
             ).fetchone()
             if not row:
                 return False
+            if booking_data:
+                preferred_date = booking_data.get('preferred_date')
+                preferred_time = booking_data.get('preferred_time')
+                if preferred_date and preferred_time:
+                    from maps_handler import get_job_duration_minutes
+                    duration = get_job_duration_minutes(booking_data)
+                    has_conflict, conflicting_id = _check_time_conflict(
+                        conn, preferred_date, preferred_time, duration,
+                        exclude_booking_id=pending_id
+                    )
+                    if has_conflict:
+                        logger.warning(
+                            f"confirm_booking: time conflict for {pending_id} "
+                            f"with existing booking {conflicting_id}"
+                        )
+                        self.log_booking_event(pending_id, 'confirm_failed', actor='system',
+                                               details={'reason': 'time_conflict',
+                                                        'conflicting_booking_id': conflicting_id})
+                        return False
             params = [datetime.now(timezone.utc).isoformat(), pending_id]
             if booking_data:
                 result = conn.execute("""
@@ -521,6 +603,117 @@ class StateManager:
                 "INSERT OR REPLACE INTO app_state(key, value) VALUES (?,?)",
                 (key, str(value))
             )
+
+    # ------------------------------------------------------------------
+    # Dead-Letter Queue (Feature 3)
+    # ------------------------------------------------------------------
+
+    def add_to_dlq(self, msg_id: str, thread_id: str, customer_email: str,
+                   raw_body: str, error_type: str, error_message: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._conn() as conn:
+            conn.execute("""
+                INSERT OR IGNORE INTO failed_extractions
+                (id, gmail_msg_id, thread_id, customer_email, raw_body,
+                 error_type, error_message, first_failed_at, last_failed_at)
+                VALUES (?,?,?,?,?,?,?,?,?)
+            """, (str(uuid.uuid4()), msg_id, thread_id, customer_email,
+                  (raw_body or '')[:2000], error_type, error_message, now, now))
+            conn.execute("""
+                UPDATE failed_extractions
+                SET failure_count = failure_count + 1, last_failed_at = ?
+                WHERE gmail_msg_id = ? AND first_failed_at != last_failed_at
+            """, (now, msg_id))
+
+    def get_unnotified_dlq_entries(self) -> list:
+        with self._conn() as conn:
+            rows = conn.execute("""
+                SELECT * FROM failed_extractions
+                WHERE failure_count >= 3 AND owner_notified = 0
+                ORDER BY last_failed_at DESC
+            """).fetchall()
+        return [dict(r) for r in rows]
+
+    def mark_dlq_notified(self, msg_id: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE failed_extractions SET owner_notified = 1 WHERE gmail_msg_id = ?",
+                (msg_id,)
+            )
+
+    # ------------------------------------------------------------------
+    # Customer Service History / Maintenance Reminders (Feature 9)
+    # ------------------------------------------------------------------
+
+    def record_completed_service(self, booking_id: str, booking_data: dict) -> None:
+        """Record service for future 6m/12m maintenance reminders."""
+        try:
+            now = datetime.now(timezone.utc)
+            vehicle_key = '_'.join(filter(None, [
+                str(booking_data.get('vehicle_year', '')),
+                str(booking_data.get('vehicle_make', '')),
+                str(booking_data.get('vehicle_model', '')),
+            ])).lower().strip('_') or 'unknown'
+            reminder_6m  = (now + timedelta(days=182)).strftime('%Y-%m-%d')
+            reminder_12m = (now + timedelta(days=365)).strftime('%Y-%m-%d')
+            with self._conn() as conn:
+                conn.execute("""
+                    INSERT OR IGNORE INTO customer_service_history
+                    (booking_id, customer_phone, customer_email, vehicle_key,
+                     service_type, completed_date, next_reminder_6m, next_reminder_12m, created_at)
+                    VALUES (?,?,?,?,?,?,?,?,?)
+                """, (
+                    booking_id,
+                    booking_data.get('customer_phone'),
+                    booking_data.get('customer_email'),
+                    vehicle_key,
+                    booking_data.get('service_type', 'rim_repair'),
+                    now.strftime('%Y-%m-%d'),
+                    reminder_6m,
+                    reminder_12m,
+                    now.isoformat(),
+                ))
+        except Exception as e:
+            logger.warning(f"record_completed_service failed: {e}")
+
+    def get_maintenance_reminders_due(self, today_str: str, interval: str) -> list:
+        """Return service history rows with reminders due today. interval: '6m' or '12m'."""
+        col_date = f'next_reminder_{interval}'
+        col_sent = f'reminder_{interval}_sent'
+        with self._conn() as conn:
+            rows = conn.execute(f"""
+                SELECT * FROM customer_service_history
+                WHERE {col_date} = ? AND {col_sent} = 0
+            """, (today_str,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def mark_maintenance_reminder_sent(self, history_id: int, interval: str) -> None:
+        col_sent = f'reminder_{interval}_sent'
+        with self._conn() as conn:
+            conn.execute(f"UPDATE customer_service_history SET {col_sent} = 1 WHERE id = ?", (history_id,))
+
+    # ------------------------------------------------------------------
+    # Bulk date cancellation (Feature 9 support)
+    # ------------------------------------------------------------------
+
+    def cancel_all_bookings_for_date(self, date_str: str, reason: str, cancelled_by: str = 'owner') -> list:
+        """Bulk cancel all confirmed bookings for a date. Returns list of cancelled booking dicts."""
+        with self._conn() as conn:
+            rows = conn.execute("""
+                SELECT id, booking_data, customer_email, thread_id
+                FROM bookings
+                WHERE preferred_date = ? AND status = 'confirmed'
+            """, (date_str,)).fetchall()
+            bookings = [dict(r) for r in rows]
+            if bookings:
+                conn.execute("""
+                    UPDATE bookings SET status = 'owner_cancelled'
+                    WHERE preferred_date = ? AND status = 'confirmed'
+                """, (date_str,))
+        for b in bookings:
+            self.log_booking_event(b['id'], 'owner_day_cancelled', actor=cancelled_by,
+                                   details={'reason': reason, 'date': date_str})
+        return bookings
 
     # ------------------------------------------------------------------
     # Internal conversion

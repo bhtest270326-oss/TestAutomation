@@ -206,6 +206,24 @@ def process_single_sms_webhook(from_number, body_text, message_sid):
         handle_owner_confirm(pending_id, pending)
     elif upper == 'NO':
         handle_owner_decline(pending_id, pending)
+    elif upper.startswith('CANCEL DATE '):
+        # Format: CANCEL DATE YYYY-MM-DD <reason>
+        rest = body_clean[len('CANCEL DATE '):].strip()
+        parts = rest.split(None, 1)  # split on first whitespace
+        if parts:
+            cancel_date = parts[0].strip()
+            cancel_reason = parts[1].strip() if len(parts) > 1 else 'unforeseen circumstances'
+            # Validate date format
+            try:
+                from datetime import datetime as _dv
+                _dv.strptime(cancel_date, '%Y-%m-%d')
+                handle_owner_day_cancellation(cancel_date, cancel_reason)
+            except ValueError:
+                send_sms(os.environ['OWNER_MOBILE'],
+                    f"Invalid date format. Use: CANCEL DATE YYYY-MM-DD reason")
+        else:
+            send_sms(os.environ['OWNER_MOBILE'],
+                "Usage: CANCEL DATE YYYY-MM-DD reason (e.g. CANCEL DATE 2026-04-15 sick day)")
     else:
         handle_owner_correction(pending_id, pending, body_clean)
     state.mark_sms_processed(message_sid)
@@ -304,6 +322,12 @@ def handle_owner_confirm(pending_id, pending):
     send_sms(os.environ['OWNER_MOBILE'], f"Booking {pending_id} confirmed. Calendar event created. Customer notified.")
     logger.info(f"Booking {pending_id} fully confirmed")
 
+    # Record service history for future maintenance reminders
+    try:
+        state.record_completed_service(pending_id, booking_data)
+    except Exception as e:
+        logger.warning(f"Could not record service history for {pending_id}: {e}")
+
     # Sync to Google Sheets
     if get_flag('flag_google_sheets_sync'):
         try:
@@ -357,6 +381,83 @@ def handle_owner_decline(pending_id, pending):
             details={'customer_notified': bool(customer_phone or customer_email)})
     except Exception:
         pass
+
+def handle_owner_day_cancellation(date_str: str, reason: str) -> None:
+    """Cancel all confirmed bookings for a date and notify customers to rebook.
+
+    Triggered by owner SMS: CANCEL DATE 2026-04-15 sick
+    """
+    from state_manager import StateManager
+    import json as _json
+    from feature_flags import get_flag
+
+    state = StateManager()
+    cancelled = state.cancel_all_bookings_for_date(date_str, reason, 'owner_sms')
+
+    if not cancelled:
+        send_sms(os.environ['OWNER_MOBILE'], f"No confirmed bookings found for {date_str}.")
+        return
+
+    notified = 0
+    for b in cancelled:
+        try:
+            bd = _json.loads(b['booking_data']) if isinstance(b['booking_data'], str) else b['booking_data']
+        except Exception:
+            bd = {}
+        customer_name = (bd.get('customer_name') or 'there').split()[0]
+        customer_phone = bd.get('customer_phone')
+        customer_email = b.get('customer_email') or bd.get('customer_email')
+
+        # Delete calendar event if one exists
+        event_id = b.get('calendar_event_id')
+        if event_id:
+            try:
+                from calendar_handler import delete_calendar_event
+                delete_calendar_event(event_id)
+            except Exception as e:
+                logger.warning(f"Could not delete calendar event {event_id}: {e}")
+
+        # SMS customer
+        if customer_phone and get_flag('flag_auto_sms_customer'):
+            try:
+                msg = (
+                    f"Hi {customer_name}, unfortunately we need to cancel your Rim Repair "
+                    f"appointment on {date_str} due to {reason}. We sincerely apologise. "
+                    f"Please reply or email us to rebook at your convenience. - Rim Repair Team"
+                )
+                send_sms(customer_phone, msg)
+                notified += 1
+            except Exception as e:
+                logger.error(f"Could not SMS customer for cancelled booking {b['id']}: {e}")
+
+        # Email customer
+        if customer_email and get_flag('flag_auto_email_replies'):
+            try:
+                from google_auth import get_gmail_service
+                from email_utils import send_customer_email, _p, _h2, DARK, RED
+                service = get_gmail_service()
+                content = (
+                    _p(f'Hi {customer_name},')
+                    + _p(f'We regret to inform you that your Rim Repair appointment on '
+                         f'<strong>{date_str}</strong> has been cancelled due to {reason}.')
+                    + _p('We sincerely apologise for the inconvenience. '
+                         'Please reply to this email or call us and we\'ll get you rebooked as soon as possible.')
+                    + _p('We\'ll do our best to prioritise your rebooking.')
+                    + f'<p style="margin:24px 0 0;color:{DARK};font-size:15px;">'
+                    f'Kind regards,<br><strong style="color:{RED};">Rim Repair Team</strong></p>'
+                )
+                send_customer_email(service, customer_email,
+                    f'Appointment Cancelled — {date_str}', content)
+            except Exception as e:
+                logger.error(f"Could not email customer for cancelled booking {b['id']}: {e}")
+
+    send_sms(
+        os.environ['OWNER_MOBILE'],
+        f"Day cancellation complete: {len(cancelled)} booking(s) cancelled for {date_str}. "
+        f"{notified} customer(s) notified via SMS. - Rim Repair System"
+    )
+    logger.info(f"Day cancellation: {len(cancelled)} bookings cancelled for {date_str} (reason: {reason})")
+
 
 def _extract_date_from_correction(text):
     match = re.search(r'\b(\d{1,2})/(\d{1,2})\b', text)
@@ -417,18 +518,18 @@ def build_customer_confirmation_sms(booking_data):
 
 def send_confirmation_email(to_email, booking_data):
     try:
-        from email_utils import send_customer_email, _h2, _p, _info_table, _ul, RED, DARK
+        from email_utils import send_customer_email, _h2, _p, _info_table, _ul, RED, DARK, esc
         service = get_gmail_service()
         name = booking_data.get('customer_name', 'there')
-        first = name.split()[0] if name and name != 'there' else 'there'
+        first = esc(name.split()[0]) if name and name != 'there' else 'there'
         date = _fmt_date(booking_data.get('preferred_date', 'TBC'))
-        address = booking_data.get('address') or booking_data.get('suburb', 'your location')
-        vehicle = ' '.join(filter(None, [
+        address = esc(booking_data.get('address') or booking_data.get('suburb', 'your location'))
+        vehicle = esc(' '.join(filter(None, [
             booking_data.get('vehicle_year'),
             booking_data.get('vehicle_colour'),
             booking_data.get('vehicle_make'),
             booking_data.get('vehicle_model'),
-        ])) or 'your vehicle'
+        ])) or 'your vehicle')
         service_type = booking_data.get('service_type', 'rim repair').replace('_', ' ').title()
         num_rims = booking_data.get('num_rims')
         if num_rims:
@@ -464,10 +565,10 @@ def send_confirmation_email(to_email, booking_data):
 
 def send_decline_email(to_email, booking_data):
     try:
-        from email_utils import send_customer_email, _p, _h2, DARK
+        from email_utils import send_customer_email, _p, _h2, DARK, esc
         service = get_gmail_service()
         name = booking_data.get('customer_name', 'there')
-        first = name.split()[0] if name and name != 'there' else 'there'
+        first = esc(name.split()[0]) if name and name != 'there' else 'there'
 
         content = (
             _p(f'Hi {first},')

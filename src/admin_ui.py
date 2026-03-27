@@ -83,9 +83,43 @@ def _render_dashboard(flags: dict, pending: list = None) -> str:
           <div class="desc">&#128295; {service} &mdash; {rims} rims</div>
           {phone_html}
         </div>
-        <div style="margin-top:10px;display:flex;gap:8px;">
+        <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
           <button onclick="confirmBooking('{bid}')" style="background:#22c55e;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-weight:600;">&#10003; Confirm</button>
           <button onclick="declineBooking('{bid}')" style="background:#ef4444;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-weight:600;">&#10007; Decline</button>
+          <button onclick="toggleEditPanel('{bid}')" style="background:#334155;color:#94a3b8;border:1px solid #475569;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:0.78rem;">&#9881; Edit / Notes</button>
+        </div>
+        <div id="edit-panel-{bid}" style="display:none;margin-top:14px;border-top:1px solid #1e3a5f;padding-top:14px;">
+          <div style="font-size:0.65rem;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#475569;margin-bottom:8px;">Notes</div>
+          <textarea id="note-text-{bid}" rows="2" placeholder="Add an internal note…" style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;padding:8px;font-size:0.8rem;resize:vertical;"></textarea>
+          <button onclick="saveBookingNote('{bid}', token)" style="margin-top:6px;background:#3b82f6;color:#fff;border:none;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:0.78rem;font-weight:600;">Save Note</button>
+
+          <div style="font-size:0.65rem;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#475569;margin-top:14px;margin-bottom:8px;">Quick Edit</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div>
+              <label style="font-size:0.7rem;color:#64748b;display:block;margin-bottom:3px;">Date</label>
+              <input type="date" id="edit-date-{bid}" value="{date}" style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;padding:6px 8px;font-size:0.8rem;">
+            </div>
+            <div>
+              <label style="font-size:0.7rem;color:#64748b;display:block;margin-bottom:3px;">Time</label>
+              <input type="time" id="edit-time-{bid}" value="{time_val}" style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;padding:6px 8px;font-size:0.8rem;">
+            </div>
+          </div>
+          <div style="margin-top:8px;">
+            <label style="font-size:0.7rem;color:#64748b;display:block;margin-bottom:3px;">Suburb / Address</label>
+            <input type="text" id="edit-address-{bid}" value="{address}" placeholder="Suburb or full address" style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;padding:6px 8px;font-size:0.8rem;">
+          </div>
+          <button onclick="saveBookingEdit('{bid}', token)" style="margin-top:8px;background:#f59e0b;color:#000;border:none;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:0.78rem;font-weight:600;">Save Changes</button>
+
+          <div style="font-size:0.65rem;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#475569;margin-top:14px;margin-bottom:8px;">Decline with Reason</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <select id="decline-reason-{bid}" style="flex:1;min-width:180px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;padding:6px 8px;font-size:0.8rem;">
+              <option value="scheduling_conflict">Scheduling Conflict</option>
+              <option value="location_too_far">Location Too Far</option>
+              <option value="customer_request">Customer Request</option>
+              <option value="other">Other</option>
+            </select>
+            <button onclick="declineWithReason('{bid}', token)" style="background:#7c3aed;color:#fff;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:0.78rem;font-weight:600;">&#10007; Decline with Reason</button>
+          </div>
         </div>
       </div>"""
     else:
@@ -308,9 +342,71 @@ def _render_dashboard(flags: dict, pending: list = None) -> str:
       }});
   }}
 
+  function toggleEditPanel(id) {{
+    var panel = document.getElementById('edit-panel-' + id);
+    if (panel) {{ panel.style.display = panel.style.display === 'none' ? 'block' : 'none'; }}
+  }}
+
+  function saveBookingNote(id, tok) {{
+    var noteEl = document.getElementById('note-text-' + id);
+    var note = noteEl ? noteEl.value.trim() : '';
+    if (!note) {{ alert('Please enter a note.'); return; }}
+    fetch('/admin/api/booking/' + id + '/notes?token=' + tok, {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{note: note}})
+    }})
+      .then(function(r) {{ return r.json(); }})
+      .then(function(d) {{
+        if (d.ok) {{ alert('Note saved.'); if (noteEl) noteEl.value = ''; }}
+        else {{ alert('Error: ' + d.error); }}
+      }});
+  }}
+
+  function saveBookingEdit(id, tok) {{
+    var dateEl    = document.getElementById('edit-date-' + id);
+    var timeEl    = document.getElementById('edit-time-' + id);
+    var addressEl = document.getElementById('edit-address-' + id);
+    var payload = {{}};
+    if (dateEl    && dateEl.value.trim())    {{ payload.preferred_date = dateEl.value.trim(); }}
+    if (timeEl    && timeEl.value.trim())    {{ payload.preferred_time = timeEl.value.trim(); }}
+    if (addressEl && addressEl.value.trim()) {{ payload.address = addressEl.value.trim(); }}
+    if (!Object.keys(payload).length) {{ alert('No fields to update.'); return; }}
+    fetch('/admin/api/booking/' + id + '/edit?token=' + tok, {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify(payload)
+    }})
+      .then(function(r) {{ return r.json(); }})
+      .then(function(d) {{
+        if (d.ok) {{ alert('Booking updated.'); location.reload(); }}
+        else {{ alert('Error: ' + d.error); }}
+      }});
+  }}
+
+  function declineWithReason(id, tok) {{
+    var reasonEl = document.getElementById('decline-reason-' + id);
+    var reason = reasonEl ? reasonEl.value : 'other';
+    if (!confirm('Decline booking ' + id + ' (' + reason + ')?')) return;
+    fetch('/admin/api/booking/' + id + '/decline-with-reason?token=' + tok, {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{reason: reason}})
+    }})
+      .then(function(r) {{ return r.json(); }})
+      .then(function(d) {{
+        if (d.ok) {{ alert('Booking declined.'); location.reload(); }}
+        else {{ alert('Error: ' + d.error); }}
+      }});
+  }}
+
   // Expose to global scope for onclick handlers
   window.confirmBooking = confirmBooking;
   window.declineBooking = declineBooking;
+  window.toggleEditPanel = toggleEditPanel;
+  window.saveBookingNote = saveBookingNote;
+  window.saveBookingEdit = saveBookingEdit;
+  window.declineWithReason = declineWithReason;
 
   // Load analytics
   fetch('/admin/api/analytics' + (token ? '?token=' + token : ''))
@@ -576,6 +672,106 @@ def api_decline_booking(booking_id):
         return jsonify({'ok': True, 'booking_id': booking_id})
     except Exception as e:
         logger.error(f"Dashboard decline error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@admin_bp.route('/admin/api/booking/<booking_id>/notes', methods=['POST'])
+def api_booking_add_note(booking_id):
+    """Add a timestamped note to a booking."""
+    if not _authorised():
+        return jsonify({'error': 'Unauthorized'}), 403
+    try:
+        from state_manager import StateManager
+        data = request.get_json(silent=True) or {}
+        note = (data.get('note') or '').strip()
+        if not note:
+            return jsonify({'error': 'Note text is required'}), 400
+        state = StateManager()
+        state.log_booking_event(booking_id, 'note', actor='owner_ui', details={'text': note})
+        return jsonify({'ok': True}), 200
+    except Exception as e:
+        logger.error(f"api_booking_add_note error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@admin_bp.route('/admin/api/booking/<booking_id>/edit', methods=['POST'])
+def api_booking_edit(booking_id):
+    """Update booking fields (date, time, address, num_rims)."""
+    if not _authorised():
+        return jsonify({'error': 'Unauthorized'}), 403
+    try:
+        from state_manager import StateManager
+        import json as _json
+        data = request.get_json(silent=True) or {}
+
+        state = StateManager()
+        with state._conn() as conn:
+            row = conn.execute(
+                "SELECT booking_data, status FROM bookings WHERE id=?", (booking_id,)
+            ).fetchone()
+        if not row:
+            return jsonify({'error': 'Booking not found'}), 404
+
+        bd = _json.loads(row['booking_data'])
+        changed = {}
+        for field in ('preferred_date', 'preferred_time', 'address', 'suburb', 'num_rims'):
+            if field in data and data[field] is not None and str(data[field]).strip():
+                bd[field] = data[field]
+                changed[field] = data[field]
+        if not changed:
+            return jsonify({'error': 'No valid fields provided'}), 400
+
+        with state._conn() as conn:
+            conn.execute(
+                "UPDATE bookings SET booking_data=? WHERE id=?",
+                (_json.dumps(bd), booking_id)
+            )
+        state.log_booking_event(booking_id, 'fields_edited', actor='owner_ui', details=changed)
+        return jsonify({'ok': True, 'changed': changed}), 200
+    except Exception as e:
+        logger.error(f"api_booking_edit error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@admin_bp.route('/admin/api/booking/<booking_id>/decline-with-reason', methods=['POST'])
+def api_booking_decline_with_reason(booking_id):
+    """Decline a pending booking and record the reason."""
+    if not _authorised():
+        return jsonify({'error': 'Unauthorized'}), 403
+    try:
+        from state_manager import StateManager
+        data = request.get_json(silent=True) or {}
+        reason = (data.get('reason') or 'No reason specified').strip()
+
+        state = StateManager()
+        pending = state.get_pending_booking(booking_id)
+        if not pending:
+            return jsonify({'error': 'Pending booking not found'}), 404
+
+        state.decline_booking(booking_id)
+        state.log_booking_event(booking_id, 'declined_with_reason', actor='owner_ui',
+                                details={'reason': reason})
+
+        # Notify customer
+        import json as _json
+        bd = pending.get('booking_data', {})
+        if isinstance(bd, str):
+            bd = _json.loads(bd)
+        customer_phone = bd.get('customer_phone')
+        from feature_flags import get_flag
+        if customer_phone and get_flag('flag_auto_sms_customer'):
+            try:
+                from twilio_handler import send_sms
+                name = (bd.get('customer_name') or 'there').split()[0]
+                send_sms(customer_phone,
+                    f"Hi {name}, unfortunately we're unable to accommodate your booking request "
+                    f"at this time. Please contact us if you'd like to discuss alternatives. - Rim Repair Team")
+            except Exception as e:
+                logger.warning(f"Could not SMS customer on decline: {e}")
+
+        return jsonify({'ok': True}), 200
+    except Exception as e:
+        logger.error(f"api_booking_decline_with_reason error: {e}")
         return jsonify({'error': str(e)}), 500
 
 

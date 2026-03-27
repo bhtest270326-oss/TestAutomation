@@ -609,10 +609,10 @@ def handle_availability_inquiry(msg_id, thread_id, subject, body, customer_email
         first_name = customer_name.split()[0].title() if customer_name != 'there' else 'there'
 
     except Exception as e:
-        logger.warning(f"Could not extract booking details for availability inquiry: {e}")
-        first_name = 'there'
-        service_description = 'rim repair'
-        duration = 120
+        logger.error(f"extract_booking_details raised an exception for availability inquiry msg {msg_id}: {e}")
+        state.add_to_dlq(msg_id, thread_id, customer_email, body, 'api_error', str(e))
+        state.mark_email_processed(msg_id)
+        return
 
     # Get week availability
     try:
@@ -669,14 +669,22 @@ def handle_availability_inquiry(msg_id, thread_id, subject, body, customer_email
 
 def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, customer_email, message_id_header=None):
     """Process a brand new booking enquiry."""
-    booking_data, missing_fields, needs_clarification = extract_booking_details(
-        body, subject, customer_email
-    )
+    try:
+        booking_data, missing_fields, needs_clarification = extract_booking_details(
+            body, subject, customer_email
+        )
+    except Exception as e:
+        logger.error(f"extract_booking_details raised an exception for msg {msg_id}: {e}")
+        state.add_to_dlq(msg_id, thread_id, customer_email, body, 'api_error', str(e))
+        state.mark_email_processed(msg_id)
+        return
 
     # If extraction returned an empty booking (system/API error), do not email the customer.
-    # Leave the email unprocessed so it will be retried on the next poll cycle.
+    # Add to DLQ and mark processed to stop the infinite retry loop.
     if not booking_data:
-        logger.error(f"Extraction returned no data for msg {msg_id} — skipping to allow retry")
+        logger.error(f"Extraction returned no data for msg {msg_id} — adding to DLQ")
+        state.add_to_dlq(msg_id, thread_id, customer_email, body, 'extraction_empty', 'AI extraction returned no data')
+        state.mark_email_processed(msg_id)
         return
 
     # --- AI Confidence Gating ---
