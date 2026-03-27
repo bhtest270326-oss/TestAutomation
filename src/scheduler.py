@@ -51,7 +51,7 @@ def _alert_owner_overrun(date_str, overrun_jobs):
     Deduplicates: only sends once per calendar date. Subsequent 5-minute optimiser
     runs for the same overrun are silently skipped until the next day.
     """
-    owner_phone = os.environ.get('OWNER_PHONE', '')
+    owner_phone = os.environ.get('OWNER_MOBILE', '')
     if not owner_phone:
         return
 
@@ -295,11 +295,11 @@ def send_morning_job_notifications():
         state.mark_reminder_sent(booking_id, 'morning_notification')
         logger.info(f"Morning notification sent for booking {booking_id}")
 
-def _time_window(time_str):
-    """Convert HH:MM to a friendly 2-hour window string, e.g. '10:00am – 12:00pm'."""
+def _time_window(time_str, duration_minutes=120):
+    """Convert HH:MM + duration to a friendly arrival window string, e.g. '10:00am – 12:00pm'."""
     try:
         start = datetime.strptime(time_str, "%H:%M")
-        end = start + timedelta(hours=2)
+        end = start + timedelta(minutes=duration_minutes)
         def fmt(dt):
             return dt.strftime("%-I:%M%p").lower().replace(':00', '')
         return f"{fmt(start)} – {fmt(end)}"
@@ -317,8 +317,9 @@ def _send_morning_email(to_email, booking_data):
 
         name = booking_data.get('customer_name', 'there')
         first = _html.escape(name.split()[0]) if name and name != 'there' else 'there'
+        from maps_handler import get_job_duration_minutes
         time_str = booking_data.get('preferred_time') or '09:00'
-        window = _time_window(time_str)
+        window = _time_window(time_str, get_job_duration_minutes(booking_data))
         address = _html.escape(booking_data.get('address') or booking_data.get('suburb', 'your location'))
         vehicle = _html.escape(' '.join(filter(None, [
             booking_data.get('vehicle_year'),
@@ -459,9 +460,15 @@ def send_post_job_review_requests():
 
 
 def check_pending_booking_expiry():
-    """Nudge the owner via SMS for pending bookings older than 48 hours with no response."""
+    """Nudge the owner via SMS for any pending booking older than 48 hours with no response."""
     state = StateManager()
-    pending = state.get_pending_bookings_with_calendar_events()
+    # Use all awaiting_owner bookings — not just those with calendar events (calendar is only
+    # used as a fallback when SMS is unavailable; most bookings go via SMS with no calendar event)
+    with state._conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM bookings WHERE status='awaiting_owner' ORDER BY created_at ASC"
+        ).fetchall()
+    pending = [state._booking_row_to_dict(r) for r in rows]
     if not pending:
         return
 

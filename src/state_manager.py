@@ -757,18 +757,22 @@ class StateManager:
     # ------------------------------------------------------------------
 
     def cancel_all_bookings_for_date(self, date_str: str, reason: str, cancelled_by: str = 'owner') -> list:
-        """Bulk cancel all confirmed bookings for a date. Returns list of cancelled booking dicts."""
+        """Bulk cancel all confirmed and awaiting-owner bookings for a date.
+
+        Includes calendar_event_id so callers can delete orphaned calendar events.
+        Returns list of cancelled booking dicts.
+        """
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute("""
-                SELECT id, booking_data, customer_email, thread_id
+                SELECT id, booking_data, customer_email, thread_id, calendar_event_id
                 FROM bookings
-                WHERE preferred_date = ? AND status = 'confirmed'
+                WHERE preferred_date = ? AND status IN ('confirmed', 'awaiting_owner')
             """, (date_str,)).fetchall()
             bookings = [dict(r) for r in rows]
             conn.execute("""
                 UPDATE bookings SET status = 'owner_cancelled'
-                WHERE preferred_date = ? AND status = 'confirmed'
+                WHERE preferred_date = ? AND status IN ('confirmed', 'awaiting_owner')
             """, (date_str,))
         for b in bookings:
             self.log_booking_event(b['id'], 'owner_day_cancelled', actor=cancelled_by,

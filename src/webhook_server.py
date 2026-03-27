@@ -9,6 +9,7 @@ Endpoints:
 """
 
 import os
+import hmac
 import json
 import base64
 import logging
@@ -44,7 +45,8 @@ def create_app():
     def gmail_webhook():
         # Optional token check — set PUBSUB_WEBHOOK_TOKEN in Railway to enable
         if _PUBSUB_TOKEN:
-            if request.args.get('token') != _PUBSUB_TOKEN:
+            token = request.args.get('token', '')
+            if not hmac.compare_digest(token.encode(), _PUBSUB_TOKEN.encode()):
                 logger.warning("Gmail webhook: invalid or missing token")
                 return 'Unauthorized', 403
 

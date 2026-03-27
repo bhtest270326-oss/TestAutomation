@@ -282,6 +282,19 @@ def poll_sms_replies():
                 handle_owner_confirm(pending_id, pending)
             elif upper == 'NO':
                 handle_owner_decline(pending_id, pending)
+            elif upper.startswith('CANCEL DATE '):
+                rest = body_clean[len('CANCEL DATE '):].strip()
+                parts = rest.split(None, 1)
+                if parts:
+                    cancel_date = parts[0].strip()
+                    cancel_reason = parts[1].strip() if len(parts) > 1 else 'unforeseen circumstances'
+                    try:
+                        from datetime import datetime as _dv
+                        _dv.strptime(cancel_date, '%Y-%m-%d')
+                        handle_owner_day_cancellation(cancel_date, cancel_reason)
+                    except ValueError:
+                        send_sms(os.environ['OWNER_MOBILE'],
+                            "Invalid date format. Use: CANCEL DATE YYYY-MM-DD reason")
             else:
                 handle_owner_correction(pending_id, pending, body_clean)
             state.mark_sms_processed(msg.sid)

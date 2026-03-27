@@ -731,11 +731,16 @@ Address: {address}"""
 def merge_booking_data(original, new_data):
     """
     Merge two booking data dicts.
-    Original values are kept. New values only fill in null/missing fields.
+    Original values are kept for most fields; new values fill in null/missing fields.
+    Exception: date/time fields are overridable — a customer's second reply may correct
+    a previously extracted date ("actually Wednesday, not Tuesday").
     """
+    # Fields the customer can override (correction of a previous reply)
+    _OVERRIDABLE = {'preferred_date', 'preferred_time', 'address', 'suburb'}
+
     merged = dict(original)
     for key, value in new_data.items():
         if value is not None and value != '' and value != 'unknown':
-            if not merged.get(key):
+            if key in _OVERRIDABLE or not merged.get(key):
                 merged[key] = value
     return merged
