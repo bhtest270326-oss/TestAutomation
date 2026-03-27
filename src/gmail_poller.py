@@ -451,6 +451,116 @@ def _assign_best_slot(booking_data, state):
         logger.warning(f"Slot computation skipped, keeping AI-extracted time: {e}")
 
 
+def _is_date_available(date_str: str, booking_data: dict, state) -> bool:
+    """Return True if there is at least one slot available on date_str for this booking.
+
+    Fails open (returns True) so a check error never silently rejects a valid booking.
+    """
+    try:
+        from maps_handler import find_next_available_slot
+        job_address = booking_data.get('address') or booking_data.get('suburb') or ''
+        day_bookings = state.get_confirmed_bookings_for_date(date_str)
+        slot_date, _ = find_next_available_slot(
+            date_str, job_address, day_bookings, new_booking_data=booking_data
+        )
+        return slot_date == date_str
+    except Exception as e:
+        logger.warning(f"Date availability check failed for {date_str}: {e}")
+        return True  # fail open
+
+
+def _send_date_full_email(service, to_email: str, subject: str, requested_date: str,
+                          first_name: str, booking_data: dict, thread_id: str, state,
+                          missing_fields: list = None) -> None:
+    """Email the customer that their requested date is full, show fresh availability,
+    and ask them to pick an available day (including all required details if still needed).
+    """
+    from ai_parser import format_availability_response
+    from maps_handler import get_week_availability, get_job_duration_minutes
+    try:
+        from datetime import datetime as _dt
+        try:
+            day_name = _dt.strptime(requested_date, '%Y-%m-%d').strftime('%A %-d %B')
+        except Exception:
+            day_name = requested_date
+
+        duration = get_job_duration_minutes(booking_data)
+        availability = get_week_availability(duration)
+
+        intro = (
+            f'<p>Hi {first_name},</p>'
+            f'<p>Thank you for your reply! Unfortunately <strong>{day_name}</strong> is '
+            f'fully booked and we\'re unable to take any further appointments that day.</p>'
+            f'<p>Here is our current availability — please choose one of the available days'
+            f'{" and include your details below" if missing_fields else ""}:</p>'
+        )
+
+        # Reuse format_availability_response but inject a custom intro by building the
+        # full HTML inline so the "Hi {name}" greeting isn't doubled.
+        table_rows = ''
+        for slot in availability:
+            if slot['available']:
+                badge = '<span style="color:#16a34a;font-weight:600;">Yes</span>'
+            else:
+                badge = '<span style="color:#dc2626;font-weight:600;">No</span>'
+            table_rows += (
+                f'<tr>'
+                f'<td style="padding:10px 16px;border-bottom:1px solid #e2e8f0;">{slot["day_name"]}</td>'
+                f'<td style="padding:10px 16px;border-bottom:1px solid #e2e8f0;">{badge}</td>'
+                f'</tr>'
+            )
+
+        fields_section = ''
+        if missing_fields:
+            fields_html = ''.join(
+                f'<li style="margin-bottom:4px;">{f}</li>' for f in missing_fields
+            )
+            fields_section = (
+                '<p><strong>To confirm your booking in one reply,</strong> please also include:</p>'
+                f'<ul style="margin:8px 0 16px 0;padding-left:20px;">{fields_html}</ul>'
+            )
+
+        html = (
+            '<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'
+            '\'Segoe UI\',Roboto,sans-serif;color:#1e293b;font-size:15px;line-height:1.6;'
+            'max-width:520px;margin:0 auto;padding:24px 16px;">'
+            + intro
+            + '<table style="border-collapse:collapse;width:100%;max-width:340px;'
+            'border:1px solid #e2e8f0;margin:16px 0;">'
+            '<thead><tr style="background:#f1f5f9;">'
+            '<th style="padding:10px 16px;text-align:left;font-size:13px;font-weight:700;'
+            'text-transform:uppercase;letter-spacing:0.05em;color:#475569;'
+            'border-bottom:2px solid #e2e8f0;">Day</th>'
+            '<th style="padding:10px 16px;text-align:left;font-size:13px;font-weight:700;'
+            'text-transform:uppercase;letter-spacing:0.05em;color:#475569;'
+            'border-bottom:2px solid #e2e8f0;">Available</th>'
+            '</tr></thead>'
+            f'<tbody>{table_rows}</tbody>'
+            '</table>'
+            + fields_section
+            + '<p>Payment is by EFTPOS on the day of the appointment. '
+            'We look forward to hearing from you!</p>'
+            '<p>Kind regards,<br><strong>Rim Repair Team</strong></p>'
+            '</body></html>'
+        )
+
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText as _MIMEText
+        msg = MIMEMultipart('alternative')
+        msg['to'] = to_email
+        msg['subject'] = subject if subject.lower().startswith('re:') else f'Re: {subject}'
+        msg.attach(_MIMEText(html, 'html'))
+
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        send_body = {'raw': raw}
+        if thread_id:
+            send_body['threadId'] = thread_id
+        service.users().messages().send(userId='me', body=send_body).execute()
+        logger.info(f"Date-full rejection email sent to {to_email} (requested {requested_date})")
+    except Exception as e:
+        logger.error(f"Could not send date-full email to {to_email}: {e}")
+
+
 def handle_availability_inquiry(msg_id, thread_id, subject, body, customer_email):
     """Respond to a customer asking about availability.
 
@@ -638,6 +748,33 @@ Rim Repair Team"""
         except Exception as e:
             logger.error(f"Duplicate check error: {e}")
 
+        # --- Date Availability Check ---
+        # If the customer has specified a date, verify it actually has room.
+        # If full, send a polite rejection with updated availability rather than
+        # silently rebooking them on a different day.
+        preferred_date = booking_data.get('preferred_date')
+        if preferred_date and not _is_date_available(preferred_date, booking_data, state):
+            first_name = (booking_data.get('customer_name') or 'there').split()[0]
+            logger.info(f"Requested date {preferred_date} is full for {customer_email} — sending date-full reply")
+            _send_date_full_email(
+                service, customer_email, subject, preferred_date,
+                first_name, booking_data, thread_id, state
+            )
+            # Keep as a pending clarification so the next reply is handled correctly
+            state.create_pending_clarification(
+                booking_data=booking_data,
+                customer_email=customer_email,
+                thread_id=thread_id,
+                msg_id=msg_id,
+                missing_fields=['your preferred available day']
+            )
+            try:
+                label_pending_reply(service, msg_id)
+            except Exception:
+                pass
+            state.mark_email_processed(msg_id)
+            return
+
         _assign_best_slot(booking_data, state)
         pending_id = state.create_pending_booking(
             booking_data=booking_data,
@@ -742,7 +879,27 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
             pass
         logger.info(f"Still missing fields for thread {thread_id}: {still_missing}")
     else:
-        # All data collected — remove clarification record, create proper pending booking
+        # All data collected — check the requested date is actually available before booking
+        preferred_date = merged_data.get('preferred_date')
+        if preferred_date and not _is_date_available(preferred_date, merged_data, state):
+            first_name = (merged_data.get('customer_name') or 'there').split()[0]
+            logger.info(f"Clarification complete but requested date {preferred_date} is full for {customer_email}")
+            _send_date_full_email(
+                service, customer_email, subject, preferred_date,
+                first_name, merged_data, thread_id, state
+            )
+            # Reset the clarification so the customer can pick a new date
+            state.update_clarification_booking_data(
+                existing_pending['id'], merged_data, ['your preferred available day']
+            )
+            try:
+                label_pending_reply(service, msg_id)
+            except Exception:
+                pass
+            state.mark_email_processed(msg_id)
+            return
+
+        # Remove clarification record, create proper pending booking
         state.remove_pending_clarification(existing_pending['id'])
         _assign_best_slot(merged_data, state)
         pending_id = state.create_pending_booking(

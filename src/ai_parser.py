@@ -213,14 +213,19 @@ def format_availability_response(
     customer_name: str,
     availability: list,
     service_description: str = '',
+    missing_fields: list = None,
 ) -> str:
     """Build an HTML email body showing a week's availability table.
+
+    Also asks the customer to include all required booking details in their reply
+    so the booking can be confirmed in a single round-trip.
 
     Args:
         customer_name:       First name or 'there'.
         availability:        List of dicts from maps_handler.get_week_availability():
                              [{'date': 'YYYY-MM-DD', 'day_name': 'Monday', 'available': True}, ...]
         service_description: Human-readable description of the service, e.g. '2-rim repair'.
+        missing_fields:      Override the default required-fields list if provided.
 
     Returns:
         HTML email body string.
@@ -239,6 +244,18 @@ def format_availability_response(
             f'<td style="padding:10px 16px;border-bottom:1px solid #e2e8f0;">{badge}</td>'
             f'</tr>'
         )
+
+    # Required fields the customer must supply to complete their booking
+    fields = missing_fields or [
+        'Your full name',
+        'Your phone number',
+        'Your suburb or service address',
+        'Vehicle make, year and model (e.g. 2019 Toyota Camry)',
+        'Description of the damage or repair needed (e.g. kerb rash on front-left rim)',
+    ]
+    fields_html = ''.join(
+        f'<li style="margin-bottom:4px;">{f}</li>' for f in fields
+    )
 
     body = (
         '<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'
@@ -259,9 +276,11 @@ def format_availability_response(
         '</tr></thead>'
         f'<tbody>{table_rows}</tbody>'
         '</table>'
-        '<p>Please reply with your preferred day and we will confirm a time that suits you. '
-        'Payment is by EFTPOS on the day of the appointment.</p>'
-        '<p>We look forward to hearing from you!</p>'
+        '<p><strong>To confirm your booking in one reply,</strong> simply let us know '
+        'your preferred available day and include the following details:</p>'
+        f'<ul style="margin:8px 0 16px 0;padding-left:20px;">{fields_html}</ul>'
+        '<p>Payment is by EFTPOS on the day of the appointment. '
+        'We look forward to hearing from you!</p>'
         '<p>Kind regards,<br><strong>Rim Repair Team</strong></p>'
         '</body></html>'
     )
