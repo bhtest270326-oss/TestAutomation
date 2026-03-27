@@ -651,6 +651,7 @@ def handle_availability_inquiry(msg_id, thread_id, subject, body, customer_email
             booking_data=booking_data,
             customer_email=customer_email,
             thread_id=thread_id,
+            msg_id=msg_id,
             missing_fields=still_needed,
         )
 
@@ -844,6 +845,57 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
         still_missing.append('A description of the damage or type of repair needed')
 
     if still_missing:
+        # Before looping with another clarification, check if the customer is
+        # actually requesting availability for a different week (e.g. "what about
+        # next week?").  If so, re-send the availability table for that week and
+        # do NOT increment the attempt counter.
+        try:
+            from ai_parser import is_availability_inquiry as _is_avail
+            if _is_avail(subject, body):
+                import re
+                from datetime import date, timedelta
+                from maps_handler import get_week_availability, get_job_duration_minutes
+                from ai_parser import format_availability_response
+                from email_utils import send_customer_email as _send_avail
+
+                _next_week_re = re.compile(r'\b(next|following)\s+week\b|\bweek\s+after\b', re.I)
+                wants_next_week = bool(_next_week_re.search(body))
+
+                from_date_str = None
+                if wants_next_week:
+                    _today = date.today()
+                    _days_ahead = (7 - _today.weekday()) % 7 or 7
+                    from_date_str = (_today + timedelta(days=_days_ahead)).strftime('%Y-%m-%d')
+
+                _duration = get_job_duration_minutes(merged_data)
+                _availability = get_week_availability(_duration, from_date_str=from_date_str)
+                _first_name = (merged_data.get('customer_name') or 'there').split()[0]
+                # Exclude date-related items from the missing list shown in the table footer
+                # since the customer will pick a date from the availability table itself.
+                _non_date_missing = [
+                    f for f in still_missing
+                    if 'date' not in f.lower() and 'day' not in f.lower()
+                ]
+                _inner_html = format_availability_response(
+                    _first_name, _availability,
+                    missing_fields=_non_date_missing if _non_date_missing else None
+                )
+                _reply_subj = subject if subject.lower().startswith('re:') else f'Re: {subject}'
+                _send_avail(service, customer_email, _reply_subj, _inner_html, thread_id=thread_id)
+                logger.info(
+                    f"Availability re-sent ({'next week' if wants_next_week else 'current week'}) "
+                    f"to {customer_email} in clarification loop"
+                )
+                state.update_clarification_booking_data(existing_pending['id'], merged_data, still_missing)
+                try:
+                    label_pending_reply(service, msg_id)
+                except Exception:
+                    pass
+                state.mark_email_processed(msg_id)
+                return
+        except Exception as _e:
+            logger.warning(f"Availability re-send check failed in clarification loop: {_e}")
+
         # Check how many times we've already asked — bail out after 3 attempts
         attempts = state.increment_clarification_attempts(existing_pending['id'])
         if attempts >= 3:
