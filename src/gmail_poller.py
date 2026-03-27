@@ -45,10 +45,13 @@ def poll_gmail():
         service = get_gmail_service()
         state = StateManager()
 
-        # Initialise all labels on first run
-        initialise_labels(service)
+        # Initialise all labels on first run - non-blocking
+        try:
+            initialise_labels(service)
+        except Exception:
+            pass
 
-        query = 'in:inbox -label:Rim Repairs/Awaiting Confirmation -label:Rim Repairs/Pending Reply -label:Rim Repairs/Confirmed -label:Rim Repairs/Declined -label:Rim Repairs/Processed'
+        query = 'in:inbox'
 
         results = service.users().messages().list(
             userId='me',
