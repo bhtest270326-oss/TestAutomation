@@ -3,6 +3,7 @@ import logging
 import math
 import requests
 from datetime import datetime, timedelta
+from itertools import permutations as _perms
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,152 @@ def get_travel_minutes(origin, destination):
     except Exception as e:
         logger.error(f"Maps API error: {e}")
         return 30
+
+
+def get_distance_matrix(addresses):
+    """Fetch NxN travel-time matrix (minutes) for a list of addresses in one API call.
+
+    addresses[0] should be the depot. Returns a 2-D list where matrix[i][j] is the
+    driving time in minutes from addresses[i] to addresses[j], including TRAVEL_BUFFER_MINUTES.
+    Falls back to 30-minute defaults on any failure.
+    """
+    n = len(addresses)
+    fallback = [[0 if i == j else 30 for j in range(n)] for i in range(n)]
+
+    if not GOOGLE_MAPS_API_KEY or n < 2:
+        return fallback
+
+    try:
+        addrs_ctx = [f"{a}, Perth WA, Australia" for a in addresses]
+        resp = requests.get(
+            "https://maps.googleapis.com/maps/api/distancematrix/json",
+            params={
+                'origins':      '|'.join(addrs_ctx),
+                'destinations': '|'.join(addrs_ctx),
+                'key':          GOOGLE_MAPS_API_KEY,
+                'mode':         'driving',
+                'region':       'au',
+            },
+            timeout=15,
+        )
+        data = resp.json()
+
+        if data.get('status') != 'OK':
+            logger.warning(f"Distance matrix status: {data.get('status')}")
+            return fallback
+
+        matrix = []
+        for i, row in enumerate(data.get('rows', [])):
+            row_mins = []
+            for j, elem in enumerate(row.get('elements', [])):
+                if i == j:
+                    row_mins.append(0)
+                elif elem.get('status') == 'OK':
+                    row_mins.append(int(elem['duration']['value'] / 60) + TRAVEL_BUFFER_MINUTES)
+                else:
+                    row_mins.append(30)
+            matrix.append(row_mins)
+
+        logger.info(f"Distance matrix fetched: {n}×{n} locations")
+        return matrix
+
+    except Exception as e:
+        logger.error(f"Distance matrix error: {e}")
+        return fallback
+
+
+def find_optimal_route(bookings_for_day, date_str):
+    """Find the optimal visit order for a list of same-day confirmed bookings.
+
+    Uses a full NxN distance matrix fetched in one Maps API call.  Solves TSP
+    with brute-force for N ≤ 8 jobs, nearest-neighbour heuristic for larger N.
+    The route always departs from and returns to BUSINESS_ADDRESS.
+
+    Args:
+        bookings_for_day: list of (booking_id, booking_data_dict) — same day, any order.
+        date_str:         'YYYY-MM-DD'
+
+    Returns:
+        Ordered list of (booking_id, updated_booking_data) with corrected
+        preferred_time values, or None if optimisation is not applicable.
+    """
+    n = len(bookings_for_day)
+    if n < 2 or not GOOGLE_MAPS_API_KEY:
+        return None
+
+    try:
+        target_date = datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        return None
+
+    # Index 0 = depot, 1..n = job addresses
+    addresses = [BUSINESS_ADDRESS] + [
+        bd.get('address') or bd.get('suburb') or BUSINESS_ADDRESS
+        for _, bd in bookings_for_day
+    ]
+
+    matrix = get_distance_matrix(addresses)
+
+    # ── TSP ──────────────────────────────────────────────────────────────────
+    job_idxs = list(range(1, n + 1))
+    best_order = None
+    best_cost = float('inf')
+
+    if n <= 8:
+        for perm in _perms(job_idxs):
+            cost = matrix[0][perm[0]]
+            for k in range(len(perm) - 1):
+                cost += matrix[perm[k]][perm[k + 1]]
+            cost += matrix[perm[-1]][0]
+            if cost < best_cost:
+                best_cost = cost
+                best_order = perm
+    else:
+        # Nearest-neighbour heuristic
+        unvisited = set(job_idxs)
+        current = 0
+        order = []
+        while unvisited:
+            nearest = min(unvisited, key=lambda j: matrix[current][j])
+            order.append(nearest)
+            unvisited.remove(nearest)
+            current = nearest
+        best_order = tuple(order)
+        best_cost = (matrix[0][best_order[0]]
+                     + sum(matrix[best_order[k]][best_order[k + 1]] for k in range(n - 1))
+                     + matrix[best_order[-1]][0])
+
+    # ── Assign start times ───────────────────────────────────────────────────
+    day_start = target_date.replace(
+        hour=BUSINESS_START_HOUR, minute=0, second=0, microsecond=0
+    )
+    current_dt = day_start
+    prev_idx = 0  # start at depot
+
+    result = []
+    for addr_idx in best_order:
+        job_slot = addr_idx - 1
+        booking_id, booking_data = bookings_for_day[job_slot]
+
+        travel = matrix[prev_idx][addr_idx]
+        start_dt = _ceil_15(current_dt + timedelta(minutes=travel))
+        if start_dt < day_start:
+            start_dt = day_start
+
+        updated = dict(booking_data)
+        updated['preferred_time'] = start_dt.strftime("%H:%M")
+        result.append((booking_id, updated))
+
+        current_dt = start_dt + timedelta(minutes=get_job_duration_minutes(booking_data))
+        prev_idx = addr_idx
+
+    route_desc = " → ".join(
+        bd.get('address') or bd.get('suburb', '?') for _, bd in result
+    )
+    logger.info(
+        f"Optimal route {date_str}: base → {route_desc} → base  (~{best_cost} min travel)"
+    )
+    return result
 
 
 def find_next_available_slot(target_date_str, new_address, day_bookings,

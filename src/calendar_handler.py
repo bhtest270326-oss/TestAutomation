@@ -260,6 +260,44 @@ Payment: EFTPOS on the day
         return None
 
 
+def update_calendar_event_time(event_id, new_start_dt, duration_minutes):
+    """Update a calendar event's start/end time in-place (used by route optimiser).
+
+    Args:
+        event_id:         Google Calendar event ID.
+        new_start_dt:     datetime object for the new start time (Perth local).
+        duration_minutes: job duration in minutes.
+
+    Returns True on success.
+    """
+    try:
+        service = get_calendar_service()
+        calendar_id = os.environ['GOOGLE_CALENDAR_ID']
+
+        event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+        end_dt = new_start_dt + timedelta(minutes=duration_minutes)
+
+        event['start'] = {'dateTime': new_start_dt.isoformat(), 'timeZone': 'Australia/Perth'}
+        event['end']   = {'dateTime': end_dt.isoformat(),       'timeZone': 'Australia/Perth'}
+
+        service.events().update(
+            calendarId=calendar_id,
+            eventId=event_id,
+            body=event,
+            sendUpdates='none',
+        ).execute()
+
+        logger.info(
+            f"Calendar event {event_id} rescheduled → "
+            f"{new_start_dt.strftime('%Y-%m-%d %H:%M')}"
+        )
+        return True
+
+    except Exception as e:
+        logger.error(f"Error updating calendar event time {event_id}: {e}")
+        return False
+
+
 def get_event_datetime(event_id):
     """Return {'date': 'YYYY-MM-DD', 'time': 'HH:MM'} reflecting the event's current
     start time (after any drag/reschedule by the owner), or None on failure."""

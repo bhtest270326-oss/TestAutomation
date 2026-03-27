@@ -1,4 +1,5 @@
 import os
+import time as _time
 import logging
 from datetime import datetime, timedelta, timezone
 from state_manager import StateManager
@@ -9,6 +10,9 @@ logger = logging.getLogger(__name__)
 
 GOOGLE_REVIEW_LINK = os.environ.get('GOOGLE_REVIEW_LINK', '')
 PERTH_UTC_OFFSET = 8  # UTC+8
+
+_last_route_opt = 0.0
+_ROUTE_OPT_INTERVAL = 300  # 5 minutes
 
 def _perth_now():
     """Return current datetime in Perth time (UTC+8)."""
@@ -21,8 +25,89 @@ def run_scheduled_tasks():
         send_morning_job_notifications()
         send_day_prior_reminders()
         send_post_job_review_requests()
+        optimize_daily_routes()
     except Exception as e:
         logger.error(f"Scheduler error: {e}", exc_info=True)
+
+
+def optimize_daily_routes():
+    """Every 5 minutes: reorder each day's confirmed bookings for optimal Maps route.
+
+    Fetches a full NxN distance matrix in one API call per day, solves TSP, then
+    updates SQLite and Google Calendar for any bookings whose times changed.
+    Only reorders bookings within the same day — never moves them between days.
+    Route always departs from and returns to the business address.
+    """
+    global _last_route_opt
+    now_ts = _time.time()
+    if now_ts - _last_route_opt < _ROUTE_OPT_INTERVAL:
+        return
+    _last_route_opt = now_ts
+
+    try:
+        from maps_handler import find_optimal_route, get_job_duration_minutes
+        from calendar_handler import update_calendar_event_time
+
+        state = StateManager()
+        today = _perth_now().strftime('%Y-%m-%d')
+        confirmed = state.get_confirmed_bookings()
+
+        # Group confirmed bookings by date (today + future only)
+        by_date = {}
+        for bid, booking in confirmed.items():
+            if booking.get('status') != 'confirmed':
+                continue
+            bd = booking.get('booking_data', {})
+            date = bd.get('preferred_date', '')
+            if not date or date < today:
+                continue
+            by_date.setdefault(date, []).append((bid, bd, booking))
+
+        for date_str, day_jobs in sorted(by_date.items()):
+            if len(day_jobs) < 2:
+                continue
+
+            jobs_input = [(bid, bd) for bid, bd, _ in day_jobs]
+            optimal = find_optimal_route(jobs_input, date_str)
+            if not optimal:
+                continue
+
+            # Build lookups
+            current_times = {bid: bd.get('preferred_time', '') for bid, bd, _ in day_jobs}
+            booking_lookup = {bid: booking for bid, _, booking in day_jobs}
+
+            any_change = False
+            for bid, new_bd in optimal:
+                if new_bd.get('preferred_time', '') == current_times.get(bid, ''):
+                    continue
+
+                any_change = True
+                state.update_confirmed_booking_data(bid, new_bd)
+
+                event_id = booking_lookup[bid].get('calendar_event_id')
+                if event_id:
+                    new_time = new_bd.get('preferred_time', '09:00')
+                    try:
+                        new_dt = datetime.strptime(
+                            f"{date_str} {new_time}", "%Y-%m-%d %H:%M"
+                        )
+                        update_calendar_event_time(
+                            event_id, new_dt, get_job_duration_minutes(new_bd)
+                        )
+                    except Exception as e:
+                        logger.error(f"Calendar update failed for {bid}: {e}")
+
+            if any_change:
+                logger.info(
+                    f"Route optimised for {date_str}: "
+                    + ", ".join(
+                        f"{bid}@{new_bd.get('preferred_time')}"
+                        for bid, new_bd in optimal
+                    )
+                )
+
+    except Exception as e:
+        logger.error(f"Route optimisation error: {e}", exc_info=True)
 
 
 def check_calendar_rsvps():
