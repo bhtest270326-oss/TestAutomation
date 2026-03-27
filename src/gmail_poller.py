@@ -485,7 +485,7 @@ def _send_date_full_email(service, to_email: str, subject: str, requested_date: 
             day_name = requested_date
 
         duration = get_job_duration_minutes(booking_data)
-        availability = get_week_availability(duration)
+        availability = get_week_availability(duration, assumed_travel_minutes=25)
 
         table_rows = ''
         for slot in availability:
