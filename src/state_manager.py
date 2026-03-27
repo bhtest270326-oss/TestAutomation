@@ -145,6 +145,18 @@ class StateManager:
     def get_confirmed_bookings(self):
         state = self._read_state()
         return state['confirmed_bookings']
+
+    def get_confirmed_bookings_for_date(self, date_str):
+        """Return list of booking_data dicts for confirmed bookings on a given date."""
+        state = self._read_state()
+        result = []
+        for booking in state['confirmed_bookings'].values():
+            if booking.get('status') != 'confirmed':
+                continue
+            bd = booking.get('booking_data', {})
+            if bd.get('preferred_date') == date_str:
+                result.append(bd)
+        return result
     
     def is_email_processed(self, msg_id):
         state = self._read_state()
@@ -195,20 +207,29 @@ class StateManager:
         return clarification_id
 
     def get_pending_booking_by_thread(self, thread_id):
-        """Find a pending clarification or booking by Gmail thread ID."""
+        """Find a pending clarification by Gmail thread ID.
+
+        Only checks pending_clarifications — if the thread already has a complete
+        pending booking or confirmed booking we treat any new message as a fresh
+        enquiry rather than risk creating duplicate bookings.
+        """
         state = self._read_state()
-        
-        # Check clarifications first
         for item in state.get('pending_clarifications', {}).values():
             if item.get('thread_id') == thread_id:
                 return item
-        
-        # Check pending bookings
+        return None
+
+    def thread_has_active_booking(self, thread_id):
+        """Return True if the thread already has a pending or confirmed booking
+        (i.e. past the clarification stage) so we can skip duplicate processing."""
+        state = self._read_state()
         for item in state.get('pending_bookings', {}).values():
             if item.get('thread_id') == thread_id:
-                return item
-        
-        return None
+                return True
+        for item in state.get('confirmed_bookings', {}).values():
+            if item.get('thread_id') == thread_id:
+                return True
+        return False
 
     def update_clarification_booking_data(self, clarification_id, booking_data, missing_fields):
         """Update partial booking data for an ongoing clarification."""

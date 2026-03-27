@@ -1,5 +1,7 @@
 import os
+import re
 import logging
+from datetime import datetime
 from twilio.rest import Client
 from twilio.base.exceptions import TwilioRestException
 from ai_parser import format_booking_for_owner, parse_owner_correction
@@ -154,11 +156,46 @@ def handle_owner_decline(pending_id, pending):
 
     send_sms(os.environ['OWNER_MOBILE'], f"Booking {pending_id} declined. Customer notified.")
 
+def _extract_date_from_correction(text):
+    """Parse a DD/MM date from a correction message. Returns YYYY-MM-DD or None."""
+    match = re.search(r'\b(\d{1,2})/(\d{1,2})\b', text)
+    if match:
+        day, month = int(match.group(1)), int(match.group(2))
+        year = datetime.now().year
+        try:
+            d = datetime(year, month, day)
+            if d.date() < datetime.now().date():
+                d = datetime(year + 1, month, day)
+            return d.strftime('%Y-%m-%d')
+        except ValueError:
+            pass
+    return None
+
+
 def handle_owner_correction(pending_id, pending, correction_text):
     state = StateManager()
     original = pending['booking_data']
 
-    updated_booking = parse_owner_correction(original, correction_text)
+    # If the owner is asking to find a free slot, compute one using Maps travel time
+    slot_hint = None
+    lower = correction_text.lower()
+    if any(kw in lower for kw in ['find', 'slot', 'free', 'available', 'schedule']):
+        try:
+            from maps_handler import find_next_available_slot
+            target_date = (
+                _extract_date_from_correction(correction_text)
+                or original.get('preferred_date')
+                or datetime.now().strftime('%Y-%m-%d')
+            )
+            job_address = original.get('address') or original.get('suburb') or ''
+            day_bookings = state.get_confirmed_bookings_for_date(target_date)
+            found_date, found_time = find_next_available_slot(target_date, job_address, day_bookings)
+            slot_hint = f"{found_date} at {found_time}"
+            logger.info(f"Maps slot computed for correction: {slot_hint}")
+        except Exception as e:
+            logger.warning(f"Slot computation failed: {e}")
+
+    updated_booking = parse_owner_correction(original, correction_text, slot_hint=slot_hint)
 
     s = state._read_state()
     if pending_id in s['pending_bookings']:

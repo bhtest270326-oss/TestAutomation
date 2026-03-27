@@ -23,7 +23,7 @@ LABELS = {
         'description': 'Booking declined by owner'
     },
     'Rim Repairs/Processed': {
-        'color': {'backgroundColor': '#a0a0a0', 'textColor': '#ffffff'},  # Grey - catch-all processed
+        'color': {'backgroundColor': '#999999', 'textColor': '#ffffff'},  # Grey - catch-all processed
         'description': 'Email has been processed by the booking system'
     },
 }

@@ -40,10 +40,14 @@ customer_phone is required if no email is available.
 
 For preferred_date:
 - Interpret relative dates like "tomorrow", "next Tuesday" based on today's date
-- If they give a range like "anytime next week" or "any day next week", pick the first available weekday in that range
+- Vague availability MUST always resolve to a concrete date — NEVER add preferred_date to missing_fields when any timeframe hint is present. Examples:
+  * "anytime next week" / "any day next week" → first Monday of next week at 09:00
+  * "flexible" / "whenever suits" / "no preference" / "as soon as possible" → next available Monday at 09:00
+  * "sometime this week" → next available weekday this week at 09:00
+  * "next fortnight" → Monday in two weeks at 09:00
 - If they say "morning" use 09:00, "afternoon" use 13:00, "end of day" use 16:00
 - If they give a time window like "between 9am and 5pm", use 09:00 as preferred_time and note the window in notes
-- Only mark preferred_date as missing if NO date or timeframe is mentioned at all
+- Only mark preferred_date as missing if NO date, week, or timeframe whatsoever is mentioned
 
 Return ONLY the JSON object, no other text."""
 
@@ -56,9 +60,9 @@ Current booking data:
 
 Owner's instruction:
 "{correction_text}"
-
+{slot_hint}
 Interpret the instruction and update the booking accordingly. Examples:
-- "Find a free 2 hour slot on 01/04" means set preferred_date to the next 01/04, preferred_time to 09:00, and add a note about 2 hour duration
+- "Find a free 2 hour slot on 01/04" means set preferred_date to the next 01/04 and preferred_time to the next available slot (use the slot hint above if provided)
 - "change time to 11am" means set preferred_time to 11:00
 - "address is 22 Smith St Balcatta" means set address field
 - "move to next Thursday" means calculate next Thursday from today and set preferred_date
@@ -104,16 +108,22 @@ def extract_booking_details(message_body, subject="", customer_email=""):
         return {}, ["the details of your booking request — please resend with your name, address, preferred date, and service type"], True
 
 
-def parse_owner_correction(original_booking, correction_text):
+def parse_owner_correction(original_booking, correction_text, slot_hint=None):
     try:
         today = datetime.now().strftime("%A %d %B %Y")
+        hint_text = (
+            f"\nAvailable slot (accounting for travel time between jobs): {slot_hint}\n"
+            f"Use this date and time when the owner asks to find a free slot.\n"
+            if slot_hint else ""
+        )
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=1000,
             messages=[{"role": "user", "content": CORRECTION_PROMPT.format(
                 today=today,
                 booking_json=json.dumps(original_booking, indent=2),
-                correction_text=correction_text
+                correction_text=correction_text,
+                slot_hint=hint_text
             )}]
         )
 

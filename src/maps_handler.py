@@ -1,0 +1,142 @@
+import os
+import logging
+import requests
+from datetime import datetime, timedelta
+
+logger = logging.getLogger(__name__)
+
+GOOGLE_MAPS_API_KEY = os.environ.get('GOOGLE_MAPS_API_KEY', '')
+JOB_DURATION_MINUTES = 120
+BUSINESS_START_HOUR = 8    # 8:00 AM — first job of the day
+BUSINESS_LATEST_START = 15  # 3:00 PM — last job must start by this to finish by ~5pm
+TRAVEL_BUFFER_MINUTES = 10  # padding added on top of Maps estimate
+
+
+def get_travel_minutes(origin, destination):
+    """Return driving time in minutes between two addresses.
+
+    Appends ', Perth WA, Australia' to help Maps disambiguate suburb-only addresses.
+    Falls back to 30 minutes if the API key is missing or the call fails.
+    """
+    if not GOOGLE_MAPS_API_KEY:
+        logger.debug("GOOGLE_MAPS_API_KEY not set — using 30 min default travel time")
+        return 30
+
+    if not origin or not destination:
+        return 30
+
+    try:
+        resp = requests.get(
+            "https://maps.googleapis.com/maps/api/distancematrix/json",
+            params={
+                'origins': f"{origin}, Perth WA, Australia",
+                'destinations': f"{destination}, Perth WA, Australia",
+                'key': GOOGLE_MAPS_API_KEY,
+                'mode': 'driving',
+                'region': 'au',
+            },
+            timeout=10
+        )
+        data = resp.json()
+
+        if data.get('status') != 'OK':
+            logger.warning(f"Maps API status: {data.get('status')} for {origin} → {destination}")
+            return 30
+
+        rows = data.get('rows', [])
+        if not rows:
+            return 30
+
+        elements = rows[0].get('elements', [])
+        if not elements or elements[0].get('status') != 'OK':
+            return 30
+
+        travel_min = int(elements[0]['duration']['value'] / 60) + TRAVEL_BUFFER_MINUTES
+        logger.info(f"Travel {origin} → {destination}: {travel_min} min")
+        return travel_min
+
+    except Exception as e:
+        logger.error(f"Maps API error: {e}")
+        return 30
+
+
+def find_next_available_slot(target_date_str, new_address, day_bookings):
+    """Find the earliest available start time on target_date for a 2-hour job.
+
+    Args:
+        target_date_str: 'YYYY-MM-DD' string for the desired date.
+        new_address:     address/suburb string for the new job.
+        day_bookings:    list of booking_data dicts already confirmed on that date,
+                         each expected to have 'preferred_time' and 'address'/'suburb'.
+
+    Returns:
+        (date_str, time_str) — may advance to next business day if no room today.
+    """
+    try:
+        target_date = datetime.strptime(target_date_str, "%Y-%m-%d")
+    except ValueError:
+        logger.warning(f"find_next_available_slot: invalid date '{target_date_str}', defaulting to today")
+        target_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Advance past weekends
+    while target_date.weekday() >= 5:
+        target_date += timedelta(days=1)
+    target_date_str = target_date.strftime("%Y-%m-%d")
+
+    day_start = target_date.replace(hour=BUSINESS_START_HOUR, minute=0, second=0, microsecond=0)
+    latest_start = target_date.replace(hour=BUSINESS_LATEST_START, minute=0, second=0, microsecond=0)
+
+    if not day_bookings:
+        return target_date_str, day_start.strftime("%H:%M")
+
+    # Build sorted list of (start, end, address) for existing jobs
+    existing = []
+    for b in day_bookings:
+        time_str = b.get('preferred_time') or '09:00'
+        try:
+            start = datetime.strptime(f"{target_date_str} {time_str}", "%Y-%m-%d %H:%M")
+        except ValueError:
+            continue
+        end = start + timedelta(minutes=JOB_DURATION_MINUTES)
+        addr = b.get('address') or b.get('suburb') or ''
+        existing.append((start, end, addr))
+    existing.sort(key=lambda x: x[0])
+
+    if not existing:
+        return target_date_str, day_start.strftime("%H:%M")
+
+    # Walk through the day looking for a gap
+    prev_end = day_start
+    prev_addr = None
+
+    for job_start, job_end, job_addr in existing:
+        # Earliest we can start the new job (travel from previous position)
+        travel_to_new = get_travel_minutes(prev_addr, new_address) if prev_addr else 0
+        earliest = prev_end + timedelta(minutes=travel_to_new) if prev_addr else prev_end
+
+        # Travel from new job to the upcoming existing job
+        travel_new_to_next = get_travel_minutes(new_address, job_addr) if (new_address and job_addr) else 30
+
+        new_job_end = earliest + timedelta(minutes=JOB_DURATION_MINUTES)
+
+        # Fits before this existing job?
+        if new_job_end + timedelta(minutes=travel_new_to_next) <= job_start and earliest <= latest_start:
+            return target_date_str, earliest.strftime("%H:%M")
+
+        # Skip past this existing job
+        prev_end = job_end
+        prev_addr = job_addr
+
+    # Try slotting after the last existing job
+    travel_from_last = get_travel_minutes(prev_addr, new_address) if prev_addr else 0
+    candidate = prev_end + timedelta(minutes=travel_from_last)
+
+    if candidate <= latest_start:
+        return target_date_str, candidate.strftime("%H:%M")
+
+    # No room today — move to next business day
+    next_day = target_date + timedelta(days=1)
+    while next_day.weekday() >= 5:
+        next_day += timedelta(days=1)
+    logger.info(f"No slot available on {target_date_str}, advancing to {next_day.strftime('%Y-%m-%d')}")
+    return next_day.strftime("%Y-%m-%d"), day_start.strftime("%H:%M")

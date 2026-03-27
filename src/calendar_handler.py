@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from maps_handler import get_travel_minutes
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +14,7 @@ SCOPES = [
     'https://www.googleapis.com/auth/calendar'
 ]
 
-DEFAULT_JOB_DURATION_MINUTES = 60
+DEFAULT_JOB_DURATION_MINUTES = 120
 
 def get_calendar_service():
     creds = Credentials(
@@ -25,6 +26,39 @@ def get_calendar_service():
         scopes=SCOPES
     )
     return build('calendar', 'v3', credentials=creds)
+
+def _get_previous_job_address(booking_data):
+    """Return address of the last confirmed job before this one on the same day, or None."""
+    try:
+        from state_manager import StateManager
+        state = StateManager()
+        date_str = booking_data.get('preferred_date')
+        time_str = booking_data.get('preferred_time') or '09:00'
+        if not date_str:
+            return None
+
+        day_bookings = state.get_confirmed_bookings_for_date(date_str)
+        new_start = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+
+        candidates = []
+        for bd in day_bookings:
+            t = bd.get('preferred_time') or '09:00'
+            try:
+                s = datetime.strptime(f"{date_str} {t}", "%Y-%m-%d %H:%M")
+            except ValueError:
+                continue
+            if s < new_start:
+                addr = bd.get('address') or bd.get('suburb') or ''
+                if addr:
+                    candidates.append((s, addr))
+
+        if not candidates:
+            return None
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return candidates[0][1]
+    except Exception:
+        return None
+
 
 def create_calendar_event(booking_data):
     """
@@ -65,6 +99,14 @@ def create_calendar_event(booking_data):
         address = booking_data.get('address') or booking_data.get('suburb', 'TBC')
         notes = booking_data.get('notes', '')
         
+        # Travel time from previous job on the same day
+        prev_address = _get_previous_job_address(booking_data)
+        if prev_address and address and address != 'TBC':
+            travel_min = get_travel_minutes(prev_address, address)
+            travel_line = f"Travel from previous job: ~{travel_min} min  ({prev_address} → {address})"
+        else:
+            travel_line = ""
+
         description = f"""JOB DETAILS
 ===========
 Customer: {customer_name}
@@ -74,10 +116,12 @@ Email: {customer_email}
 Vehicle: {vehicle}
 Service: {service_type}{f' x{num_rims} rims' if num_rims else ''}
 Address: {address}
+Duration: ~2 hours
+{travel_line}
 
 Payment: EFTPOS on the day
 
-{f'Notes: {notes}' if notes else ''}"""
+{f'Notes: {notes}' if notes else ''}""".strip()
         
         event = {
             'summary': title,

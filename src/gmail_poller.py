@@ -95,8 +95,13 @@ def poll_gmail():
             if existing_pending:
                 handle_clarification_reply(
                     service, state, msg_id, thread_id,
-                    existing_pending, body, subject, customer_email
+                    existing_pending, body, subject, customer_email,
+                    message_id_header=message_id_header
                 )
+            elif thread_id and state.thread_has_active_booking(thread_id):
+                # Thread already has a queued or confirmed booking — skip to avoid
+                # creating a duplicate while still marking the message processed.
+                logger.info(f"Thread {thread_id} already has an active booking, skipping")
             else:
                 handle_new_enquiry(
                     service, state, msg_id, thread_id,
@@ -149,7 +154,7 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
         logger.info(f"Owner confirmation sent for booking {pending_id}")
 
 
-def handle_clarification_reply(service, state, msg_id, thread_id, existing_pending, body, subject, customer_email):
+def handle_clarification_reply(service, state, msg_id, thread_id, existing_pending, body, subject, customer_email, message_id_header=None):
     """Customer replied with missing info — merge with existing partial booking."""
     original_data = existing_pending.get('booking_data', {})
 
@@ -160,7 +165,6 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
     merged_data = merge_booking_data(original_data, new_data)
 
     # Re-check what's still missing
-    required = ['customer_name', 'preferred_date']
     address_present = merged_data.get('address') or merged_data.get('suburb')
     service_present = merged_data.get('service_type') and merged_data.get('service_type') != 'unknown'
 
@@ -175,8 +179,9 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
         still_missing.append('the type of service required (rim repair or paint touch-up)')
 
     if still_missing:
-        # Still incomplete — ask again, reply in same thread
-        send_clarification_email(service, customer_email, subject, still_missing)
+        # Still incomplete — ask again, keeping reply inside the same Gmail thread
+        send_clarification_email(service, customer_email, subject, still_missing,
+                                  thread_id=thread_id, message_id_header=message_id_header)
         state.update_clarification_booking_data(existing_pending['id'], merged_data, still_missing)
         try:
             label_pending_reply(service, msg_id)
