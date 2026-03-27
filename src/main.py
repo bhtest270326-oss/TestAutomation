@@ -39,6 +39,12 @@ def _background_loop():
             # Legacy polling fallback
             if not PUBSUB_ENABLED:
                 poll_gmail()
+                try:
+                    from state_manager import StateManager
+                    from datetime import datetime, timezone
+                    StateManager().set_app_state('last_gmail_poll_at', datetime.now(timezone.utc).isoformat())
+                except Exception:
+                    pass
                 poll_sms_replies()
 
             run_scheduled_tasks()

@@ -7,6 +7,27 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+
+def _is_valid_au_phone(phone: str) -> bool:
+    """Return True if phone looks like a valid Australian phone number."""
+    if not phone:
+        return False
+    # Strip spaces, dashes, parentheses
+    digits = re.sub(r'[\s\-\(\)]', '', str(phone))
+    # International format: +61 followed by 9 digits
+    if digits.startswith('+61') and len(digits) == 12:
+        return True
+    # Local mobile: 04XX XXX XXX = 10 digits starting with 04
+    if digits.startswith('04') and len(digits) == 10:
+        return True
+    # Local landline WA: 08XX XXX XXX = 10 digits starting with 08
+    if digits.startswith('08') and len(digits) == 10:
+        return True
+    # 61 without +: 614XXXXXXXXX = 11 digits
+    if digits.startswith('614') and len(digits) == 12:
+        return True
+    return False
+
 client = anthropic.Anthropic(api_key=os.environ['ANTHROPIC_API_KEY'])
 
 # ---------------------------------------------------------------------------
@@ -331,10 +352,10 @@ def extract_booking_details(message_body, subject="", customer_email=""):
             logger.warning(f"Invalid preferred_time '{pt}' — clearing")
             booking_data['preferred_time'] = None
 
-        # customer_phone must contain digits
+        # customer_phone must be a valid Australian phone number
         phone = booking_data.get('customer_phone')
-        if phone and not re.search(r'\d', str(phone)):
-            logger.warning(f"customer_phone has no digits '{phone}' — clearing")
+        if phone and not _is_valid_au_phone(str(phone)):
+            logger.info(f"Phone '{phone}' failed AU format validation — clearing")
             booking_data['customer_phone'] = None
 
         # num_rims must be an integer
@@ -371,6 +392,8 @@ def extract_booking_details(message_body, subject="", customer_email=""):
             booking_data['customer_email'] = customer_email
 
         needs_clarification = len(missing_fields) > 0
+        # NOTE: 'confidence' is NOT stripped here — booking_data is returned as-is so the
+        # caller receives the AI's confidence field ('high'/'medium'/'low') unchanged.
         logger.info(f"Extracted booking: confidence={booking_data.get('confidence')}, missing={missing_fields}")
         return booking_data, missing_fields, needs_clarification
 

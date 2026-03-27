@@ -34,6 +34,10 @@ FLAGS = {
         'Post-job review request SMS',
         'Send a Google review request ~3 hours after job completion',
     ),
+    'flag_google_sheets_sync': (
+        'Google Sheets sync',
+        'Log confirmed bookings to a shared Google Sheet automatically',
+    ),
 }
 
 

@@ -69,6 +69,16 @@ def _ensure_schema(conn):
         CREATE INDEX IF NOT EXISTS idx_bookings_status_date   ON bookings(status, preferred_date);
         CREATE INDEX IF NOT EXISTS idx_bookings_status_event  ON bookings(status, calendar_event_id);
         CREATE INDEX IF NOT EXISTS idx_clarifications_thread  ON clarifications(thread_id);
+
+        CREATE TABLE IF NOT EXISTS booking_events (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            booking_id  TEXT NOT NULL,
+            event_type  TEXT NOT NULL,
+            actor       TEXT,
+            details     TEXT,
+            created_at  TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_events_booking ON booking_events(booking_id);
     """)
     conn.commit()
 
@@ -200,6 +210,7 @@ class StateManager:
                 booking_data.get('preferred_date'),
                 datetime.now(timezone.utc).isoformat()
             ))
+        self.log_booking_event(pending_id, 'created', actor='ai')
         logger.info(f"Created pending booking {pending_id}")
         return pending_id
 
@@ -247,6 +258,7 @@ class StateManager:
                 if result.rowcount == 0:
                     logger.warning(f"confirm_booking: no rows updated for {pending_id}")
                     return False
+        self.log_booking_event(pending_id, 'confirmed', actor='system')
         logger.info(f"Confirmed booking {pending_id}")
         return True
 
@@ -255,6 +267,7 @@ class StateManager:
             conn.execute("""
                 UPDATE bookings SET status='declined', declined_at=? WHERE id=?
             """, (datetime.now(timezone.utc).isoformat(), pending_id))
+        self.log_booking_event(pending_id, 'declined', actor='system')
         return True
 
     def update_confirmed_booking_data(self, booking_id, booking_data):
@@ -320,6 +333,56 @@ class StateManager:
             return False
         reminders = json.loads(row['reminders_sent'] or '[]')
         return any(r['type'] == reminder_type for r in reminders)
+
+    # ------------------------------------------------------------------
+    # Audit trail
+    # ------------------------------------------------------------------
+
+    def log_booking_event(self, booking_id: str, event_type: str,
+                          actor: str = 'system', details: dict = None):
+        """Record a state transition or notable action on a booking.
+
+        event_type examples: 'created', 'confirmed', 'declined', 'rescheduled',
+                             'cancelled', 'data_updated', 'reminder_sent',
+                             'customer_notified', 'expiry_nudge_sent',
+                             'duplicate_detected', 'sheets_synced'
+        actor examples: 'owner_sms', 'owner_calendar', 'scheduler', 'ai',
+                        'customer', 'system', 'dashboard'
+        """
+        import json as _json
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT INTO booking_events
+                   (booking_id, event_type, actor, details, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    booking_id,
+                    event_type,
+                    actor,
+                    _json.dumps(details) if details else None,
+                    datetime.now(timezone.utc).isoformat(),
+                )
+            )
+
+    def get_booking_events(self, booking_id: str) -> list:
+        """Return all audit events for a booking, oldest first."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT id, booking_id, event_type, actor, details, created_at
+                   FROM booking_events WHERE booking_id = ?
+                   ORDER BY created_at ASC""",
+                (booking_id,)
+            ).fetchall()
+        result = []
+        for row in rows:
+            d = dict(row)
+            if d.get('details'):
+                try:
+                    d['details'] = json.loads(d['details'])
+                except Exception:
+                    pass
+            result.append(d)
+        return result
 
     # ------------------------------------------------------------------
     # Confirmed bookings queries

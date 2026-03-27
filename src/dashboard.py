@@ -296,6 +296,13 @@ input:checked+.slider:before{transform:translateX(21px);}
 .refresh-bar{text-align:right;font-size:0.67rem;color:var(--muted);margin-bottom:14px;}
 @keyframes spin{to{transform:rotate(360deg)}}
 .spin{display:inline-block;animation:spin .7s linear infinite;}
+
+/* ─ Analytics suburbs ─ */
+.suburb-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border);font-size:0.8rem;color:var(--text);}
+.suburb-row:last-child{border-bottom:none;}
+.suburb-badge{background:var(--subtle);color:var(--accent);font-size:0.7rem;font-weight:700;padding:2px 8px;border-radius:8px;border:1px solid var(--border);}
+@media(max-width:900px){#analytics-stats{grid-template-columns:repeat(2,1fr)!important;}}
+@media(max-width:500px){#analytics-stats{grid-template-columns:1fr 1fr!important;}}
 </style>
 </head>
 <body>
@@ -419,6 +426,39 @@ input:checked+.slider:before{transform:translateX(21px);}
     <div class="pipeline-bar"></div>
   </div>
 
+  <!-- Analytics -->
+  <div class="pipeline" id="analytics-section">
+    <div class="pipeline-head">
+      <div>
+        <div class="pipeline-title">&#128200; Analytics</div>
+        <div class="pipeline-sub">Booking conversion and performance metrics</div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;" id="analytics-stats">
+      <div class="stat">
+        <div class="stat-icon si-green">&#128200;</div>
+        <div><div class="stat-num c-green" id="an-conversion">—</div><div class="stat-lbl">Conversion %</div></div>
+      </div>
+      <div class="stat">
+        <div class="stat-icon si-blue">&#9201;</div>
+        <div><div class="stat-num c-blue" id="an-confirm-time">—</div><div class="stat-lbl">Avg Confirm (hrs)</div></div>
+      </div>
+      <div class="stat">
+        <div class="stat-icon si-amber">&#128203;</div>
+        <div><div class="stat-num c-amber" id="an-total-created">—</div><div class="stat-lbl">Total Created</div></div>
+      </div>
+      <div class="stat">
+        <div class="stat-icon si-purple">&#10060;</div>
+        <div><div class="stat-num c-purple" id="an-total-declined">—</div><div class="stat-lbl">Total Declined</div></div>
+      </div>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;">
+      <div style="font-size:0.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:10px;">Top 5 Suburbs</div>
+      <div id="an-suburbs"><span style="color:var(--muted);font-size:0.8rem;">Loading…</span></div>
+    </div>
+    <div class="pipeline-bar"></div>
+  </div>
+
   <!-- Main grid: Controls + Bookings -->
   <div class="main-grid">
 
@@ -533,7 +573,7 @@ async function refreshAll() {
   const btn = document.getElementById('refresh-btn');
   btn.innerHTML = '<span class="spin">&#8635;</span> Refreshing';
   btn.classList.add('loading');
-  await Promise.allSettled([loadData(), loadGmail()]);
+  await Promise.allSettled([loadData(), loadGmail(), loadAnalytics()]);
   btn.innerHTML = '&#8635; Refresh';
   btn.classList.remove('loading');
 }
@@ -582,10 +622,49 @@ function bookingCard(b) {
   </div>`;
 }
 
+function pendingBookingCard(b) {
+  const rims = b.rims && b.rims !== '?' ? ` &bull; ${b.rims} rim${b.rims != 1 ? 's' : ''}` : '';
+  return `<div class="bcard">
+    <div class="bcard-top"><div class="bcard-name">${b.name}</div><div class="bcard-id">${b.id}</div></div>
+    <div class="bcard-row">
+      <div class="bcard-item">&#128197; <span>${fmtDate(b.date)} at ${b.time}</span></div>
+      <div class="bcard-item">&#128205; <span>${b.address}</span></div>
+    </div>
+    <div class="bcard-row">
+      <div class="bcard-item">&#128295; <span>${b.service}${rims}</span></div>
+      ${b.phone ? `<div class="bcard-item">&#128222; <span>${b.phone}</span></div>` : ''}
+    </div>
+    <div style="margin-top:10px;display:flex;gap:8px;">
+      <button onclick="confirmBooking('${b.id}')" style="background:#22c55e;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-weight:600;">&#10003; Confirm</button>
+      <button onclick="declineBooking('${b.id}')" style="background:#ef4444;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-weight:600;">&#10007; Decline</button>
+    </div>
+  </div>`;
+}
+
+function confirmBooking(id) {
+  if (!confirm('Confirm booking ' + id + '?')) return;
+  fetch('/api/booking/' + id + '/confirm', {method: 'POST'})
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.ok) { alert('Booking ' + id + ' confirmed!'); refreshAll(); }
+      else { alert('Error: ' + d.error); }
+    });
+}
+
+function declineBooking(id) {
+  if (!confirm('Decline booking ' + id + '?')) return;
+  fetch('/api/booking/' + id + '/decline', {method: 'POST'})
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.ok) { alert('Booking ' + id + ' declined.'); refreshAll(); }
+      else { alert('Error: ' + d.error); }
+    });
+}
+
 function renderBookings(pending, upcoming) {
   document.getElementById('pending-count').textContent  = pending.length;
   document.getElementById('upcoming-count').textContent = upcoming.length;
-  document.getElementById('pending-list').innerHTML  = pending.length  ? pending.map(bookingCard).join('')  : '<div class="empty">No bookings awaiting approval</div>';
+  document.getElementById('pending-list').innerHTML  = pending.length  ? pending.map(pendingBookingCard).join('')  : '<div class="empty">No bookings awaiting approval</div>';
   document.getElementById('upcoming-list').innerHTML = upcoming.length ? upcoming.map(bookingCard).join('') : '<div class="empty">No upcoming bookings</div>';
 }
 
@@ -676,11 +755,37 @@ async function loadGmail() {
   }
 }
 
+/* ─ Analytics ─ */
+async function loadAnalytics() {
+  try {
+    const r = await fetch('/api/analytics');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d.error) return;
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v ?? '—'; };
+    set('an-conversion',     d.conversion_rate_pct !== undefined ? d.conversion_rate_pct + '%' : '—');
+    set('an-confirm-time',   d.avg_confirm_hours !== null && d.avg_confirm_hours !== undefined ? d.avg_confirm_hours : '—');
+    set('an-total-created',  d.total_created);
+    set('an-total-declined', d.total_declined);
+    const suburbs = d.top_suburbs || [];
+    const suburbEl = document.getElementById('an-suburbs');
+    if (suburbEl) {
+      suburbEl.innerHTML = suburbs.length
+        ? suburbs.map(s => `<div class="suburb-row"><span>${s.suburb}</span><span class="suburb-badge">${s.count}</span></div>`).join('')
+        : '<div style="color:var(--muted);font-size:0.8rem;">No data yet</div>';
+    }
+  } catch (e) {
+    // silently ignore analytics load failures
+  }
+}
+
 /* ─ Init ─ */
 loadData();
 loadGmail();
-setInterval(loadData,  60000);
-setInterval(loadGmail, 120000);
+loadAnalytics();
+setInterval(loadData,      60000);
+setInterval(loadGmail,    120000);
+setInterval(loadAnalytics, 300000);
 </script>
 </body>
 </html>"""
@@ -713,6 +818,147 @@ def api_gmail():
         return jsonify({'messages': [], 'error': f'Railway returned {r.status_code}'})
     except Exception as e:
         return jsonify({'messages': [], 'error': str(e)})
+
+
+@app.route('/api/booking/<booking_id>/confirm', methods=['POST'])
+def api_confirm_booking(booking_id):
+    cfg   = _load_cfg()
+    url   = cfg.get('railway_url', '').strip().rstrip('/')
+    token = cfg.get('admin_token', '').strip()
+    if url:
+        try:
+            import requests as _req
+            qs = f'?token={token}' if token else ''
+            r  = _req.post(f'{url}/admin/api/booking/{booking_id}/confirm{qs}', timeout=12)
+            if r.status_code == 200:
+                return jsonify(r.json())
+            return jsonify({'error': f'Railway returned {r.status_code}'}), r.status_code
+        except Exception as e:
+            return jsonify({'error': str(e)}), 502
+    else:
+        try:
+            from state_manager import StateManager
+            from twilio_handler import handle_owner_confirm
+            state = StateManager()
+            pending = state.get_pending_booking(booking_id)
+            if not pending:
+                return jsonify({'error': f'No pending booking {booking_id}'}), 404
+            handle_owner_confirm(booking_id, pending)
+            return jsonify({'ok': True, 'booking_id': booking_id})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/booking/<booking_id>/decline', methods=['POST'])
+def api_decline_booking(booking_id):
+    cfg   = _load_cfg()
+    url   = cfg.get('railway_url', '').strip().rstrip('/')
+    token = cfg.get('admin_token', '').strip()
+    if url:
+        try:
+            import requests as _req
+            qs = f'?token={token}' if token else ''
+            r  = _req.post(f'{url}/admin/api/booking/{booking_id}/decline{qs}', timeout=12)
+            if r.status_code == 200:
+                return jsonify(r.json())
+            return jsonify({'error': f'Railway returned {r.status_code}'}), r.status_code
+        except Exception as e:
+            return jsonify({'error': str(e)}), 502
+    else:
+        try:
+            from state_manager import StateManager
+            from twilio_handler import handle_owner_decline
+            state = StateManager()
+            pending = state.get_pending_booking(booking_id)
+            if not pending:
+                return jsonify({'error': f'No pending booking {booking_id}'}), 404
+            handle_owner_decline(booking_id, pending)
+            return jsonify({'ok': True, 'booking_id': booking_id})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/analytics')
+def api_analytics():
+    cfg   = _load_cfg()
+    url   = cfg.get('railway_url', '').strip().rstrip('/')
+    token = cfg.get('admin_token', '').strip()
+    if url:
+        try:
+            import requests as _req
+            qs = f'?token={token}' if token else ''
+            r  = _req.get(f'{url}/admin/api/analytics{qs}', timeout=12)
+            if r.status_code == 200:
+                return jsonify(r.json())
+            return jsonify({'error': f'Railway returned {r.status_code}'}), r.status_code
+        except Exception as e:
+            return jsonify({'error': str(e)}), 502
+    else:
+        try:
+            from state_manager import StateManager, _get_conn
+            from datetime import datetime, timezone, timedelta
+            import json as _json
+
+            now = datetime.now(timezone.utc)
+
+            weeks = []
+            for i in range(7, -1, -1):
+                week_start = (now - timedelta(weeks=i+1)).strftime('%Y-%m-%d')
+                week_end   = (now - timedelta(weeks=i)).strftime('%Y-%m-%d')
+                with _get_conn() as conn:
+                    count = conn.execute(
+                        "SELECT COUNT(*) FROM bookings WHERE status='confirmed' AND confirmed_at >= ? AND confirmed_at < ?",
+                        (week_start, week_end)
+                    ).fetchone()[0]
+                weeks.append({'week_start': week_start, 'count': count})
+
+            with _get_conn() as conn:
+                total_created   = conn.execute("SELECT COUNT(*) FROM bookings").fetchone()[0]
+                total_confirmed = conn.execute("SELECT COUNT(*) FROM bookings WHERE status='confirmed'").fetchone()[0]
+                total_declined  = conn.execute("SELECT COUNT(*) FROM bookings WHERE status='declined'").fetchone()[0]
+
+            conversion_rate = round(total_confirmed / total_created * 100, 1) if total_created > 0 else 0
+
+            with _get_conn() as conn:
+                rows = conn.execute("SELECT booking_data FROM bookings WHERE status='confirmed'").fetchall()
+            suburb_counts = {}
+            for row in rows:
+                try:
+                    bd = _json.loads(row[0])
+                    suburb = bd.get('suburb') or bd.get('address', '').split(',')[0].strip()
+                    if suburb:
+                        suburb_counts[suburb] = suburb_counts.get(suburb, 0) + 1
+                except Exception:
+                    pass
+            top_suburbs = sorted(suburb_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+
+            with _get_conn() as conn:
+                rows = conn.execute(
+                    "SELECT created_at, confirmed_at FROM bookings WHERE status='confirmed' AND created_at IS NOT NULL AND confirmed_at IS NOT NULL LIMIT 50"
+                ).fetchall()
+            confirm_times = []
+            for row in rows:
+                try:
+                    created   = datetime.fromisoformat(row[0])
+                    confirmed = datetime.fromisoformat(row[1])
+                    hours = (confirmed - created).total_seconds() / 3600
+                    if 0 < hours < 168:
+                        confirm_times.append(hours)
+                except Exception:
+                    pass
+            avg_confirm_hours = round(sum(confirm_times) / len(confirm_times), 1) if confirm_times else None
+
+            return jsonify({
+                'bookings_per_week':   weeks,
+                'conversion_rate_pct': conversion_rate,
+                'total_created':       total_created,
+                'total_confirmed':     total_confirmed,
+                'total_declined':      total_declined,
+                'top_suburbs':         [{'suburb': s, 'count': c} for s, c in top_suburbs],
+                'avg_confirm_hours':   avg_confirm_hours,
+            })
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
 
 
 @app.route('/toggle', methods=['POST'])

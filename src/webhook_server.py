@@ -5,6 +5,7 @@ Endpoints:
   POST /webhook/gmail          — Google Pub/Sub push for new Gmail messages
   POST /webhook/twilio/sms     — Twilio inbound SMS from the owner
   GET  /health                 — Railway health check
+  GET  /health/detailed        — Per-component health check
 """
 
 import os
@@ -61,6 +62,12 @@ def create_app():
         try:
             from gmail_poller import process_history_notification
             process_history_notification(history_id)
+            try:
+                from state_manager import StateManager
+                from datetime import datetime, timezone
+                StateManager().set_app_state('last_gmail_poll_at', datetime.now(timezone.utc).isoformat())
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"Gmail webhook processing error: {e}", exc_info=True)
             # Return 200 anyway — returning 4xx/5xx causes Pub/Sub to retry
@@ -133,5 +140,105 @@ def create_app():
                 'error_type': type(e).__name__,
                 'error': str(e)
             }), 500
+
+    @app.route('/health/detailed', methods=['GET'])
+    def health_detailed():
+        """Detailed system health check with per-component status."""
+        import time
+        import os
+        from datetime import datetime, timezone, timedelta
+
+        checks = {}
+        overall = 'healthy'
+
+        # --- Database ---
+        try:
+            from state_manager import StateManager, DB_PATH
+            state = StateManager()
+            db_size_mb = round(os.path.getsize(DB_PATH) / 1024 / 1024, 2) if os.path.exists(DB_PATH) else 0
+            confirmed = state.get_confirmed_bookings()
+            pending_bookings_with_cal = state.get_pending_bookings_with_calendar_events()
+            checks['database'] = {
+                'status': 'ok',
+                'size_mb': db_size_mb,
+                'confirmed_count': len(confirmed),
+            }
+        except Exception as e:
+            checks['database'] = {'status': 'critical', 'error': str(e)}
+            overall = 'critical'
+
+        # --- Gmail last poll ---
+        try:
+            from state_manager import StateManager
+            state = StateManager()
+            last_poll = state.get_app_state('last_gmail_poll_at')
+            if last_poll:
+                last_dt = datetime.fromisoformat(last_poll)
+                minutes_ago = round((datetime.now(timezone.utc) - last_dt).total_seconds() / 60, 1)
+                poll_status = 'ok' if minutes_ago < 10 else ('warning' if minutes_ago < 30 else 'stale')
+                if poll_status != 'ok' and overall == 'healthy':
+                    overall = 'degraded'
+                checks['gmail_last_poll'] = {
+                    'status': poll_status,
+                    'last_poll_at': last_poll,
+                    'minutes_ago': minutes_ago,
+                }
+            else:
+                checks['gmail_last_poll'] = {'status': 'unknown', 'note': 'No poll recorded yet'}
+        except Exception as e:
+            checks['gmail_last_poll'] = {'status': 'error', 'error': str(e)}
+
+        # --- Pending bookings age ---
+        try:
+            from state_manager import StateManager
+            state = StateManager()
+            import sqlite3
+            from state_manager import _get_conn
+            with _get_conn() as conn:
+                rows = conn.execute(
+                    "SELECT id, created_at FROM bookings WHERE status='awaiting_owner' ORDER BY created_at ASC"
+                ).fetchall()
+            if rows:
+                oldest = rows[0]
+                oldest_dt = datetime.fromisoformat(oldest['created_at'])
+                hours_old = round((datetime.now(timezone.utc) - oldest_dt).total_seconds() / 3600, 1)
+                age_status = 'ok' if hours_old < 12 else ('warning' if hours_old < 48 else 'stale')
+                if age_status == 'stale' and overall == 'healthy':
+                    overall = 'degraded'
+                checks['pending_bookings'] = {
+                    'status': age_status,
+                    'count': len(rows),
+                    'oldest_booking_id': oldest['id'],
+                    'oldest_hours_old': hours_old,
+                }
+            else:
+                checks['pending_bookings'] = {'status': 'ok', 'count': 0}
+        except Exception as e:
+            checks['pending_bookings'] = {'status': 'error', 'error': str(e)}
+
+        # --- Twilio ---
+        twilio_ok = all([
+            os.environ.get('TWILIO_ACCOUNT_SID'),
+            os.environ.get('TWILIO_AUTH_TOKEN'),
+            os.environ.get('TWILIO_FROM_NUMBER'),
+            os.environ.get('OWNER_MOBILE'),
+        ])
+        checks['twilio'] = {'status': 'ok' if twilio_ok else 'misconfigured'}
+        if not twilio_ok and overall == 'healthy':
+            overall = 'degraded'
+
+        # --- Google Maps ---
+        maps_ok = bool(os.environ.get('GOOGLE_MAPS_API_KEY'))
+        checks['google_maps'] = {'status': 'ok' if maps_ok else 'no_api_key (using 30min fallback)'}
+
+        # --- Calendar ---
+        cal_ok = bool(os.environ.get('GOOGLE_CALENDAR_ID'))
+        checks['google_calendar'] = {'status': 'ok' if cal_ok else 'misconfigured'}
+
+        return jsonify({
+            'status': overall,
+            'checks': checks,
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+        }), 200 if overall != 'critical' else 503
 
     return app

@@ -45,7 +45,7 @@ def _qs() -> str:
 # Dashboard
 # ---------------------------------------------------------------------------
 
-def _render_dashboard(flags: dict) -> str:
+def _render_dashboard(flags: dict, pending: list = None) -> str:
     cards = ''
     for key, data in flags.items():
         on = data['enabled']
@@ -62,6 +62,40 @@ def _render_dashboard(flags: dict) -> str:
           <button type="submit" class="btn" style="background:{btn_color}">{btn_label}</button>
         </form>
       </div>"""
+
+    pending_cards = ''
+    if pending:
+        for b in pending:
+            bid = b.get('id', '')
+            name = b.get('name', '—')
+            date = b.get('date', '?')
+            time_val = b.get('time', '?')
+            address = b.get('address', '?')
+            service = b.get('service', '?')
+            rims = b.get('rims', '?')
+            phone = b.get('phone', '')
+            phone_html = f'<div class="desc">&#128222; {phone}</div>' if phone else ''
+            pending_cards += f"""
+      <div class="pending-card">
+        <div class="info">
+          <div class="label">{name} <span style="font-size:0.65rem;color:#475569;margin-left:6px;">{bid}</span></div>
+          <div class="desc">&#128197; {date} at {time_val} &nbsp;&bull;&nbsp; &#128205; {address}</div>
+          <div class="desc">&#128295; {service} &mdash; {rims} rims</div>
+          {phone_html}
+        </div>
+        <div style="margin-top:10px;display:flex;gap:8px;">
+          <button onclick="confirmBooking('{bid}')" style="background:#22c55e;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-weight:600;">&#10003; Confirm</button>
+          <button onclick="declineBooking('{bid}')" style="background:#ef4444;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-weight:600;">&#10007; Decline</button>
+        </div>
+      </div>"""
+    else:
+        pending_cards = '<div style="color:#475569;font-size:0.8rem;padding:4px 0;">No bookings awaiting approval</div>'
+
+    pending_section = f"""
+  <div class="section-label" style="margin-top:24px;">Pending Approval ({len(pending) if pending else 0})</div>
+  {pending_cards}"""
+
+    qs = _qs()
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -109,6 +143,14 @@ def _render_dashboard(flags: dict) -> str:
       align-items: center;
       gap: 14px;
     }}
+    .pending-card {{
+      background: #1e293b;
+      border: 1px solid #1e3a5f;
+      border-radius: 14px;
+      padding: 16px;
+      margin-bottom: 10px;
+    }}
+    .pending-card .info {{ flex: 1; min-width: 0; margin-bottom: 6px; }}
     .info {{ flex: 1; min-width: 0; }}
     .label {{
       font-size: 0.9rem;
@@ -141,14 +183,156 @@ def _render_dashboard(flags: dict) -> str:
       color: #1e293b;
       margin-top: 32px;
     }}
+    /* Analytics */
+    .analytics-section {{
+      margin-bottom: 28px;
+    }}
+    .analytics-grid {{
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-bottom: 14px;
+    }}
+    @media(max-width: 700px) {{ .analytics-grid {{ grid-template-columns: repeat(2, 1fr); }} }}
+    .a-stat {{
+      background: #1e293b;
+      border: 1px solid #1e3a5f;
+      border-radius: 12px;
+      padding: 14px 16px;
+    }}
+    .a-stat-num {{
+      font-size: 1.6rem;
+      font-weight: 800;
+      color: #3b82f6;
+      line-height: 1;
+      margin-bottom: 4px;
+    }}
+    .a-stat-lbl {{
+      font-size: 0.65rem;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }}
+    .suburbs-panel {{
+      background: #1e293b;
+      border: 1px solid #1e3a5f;
+      border-radius: 12px;
+      padding: 14px 16px;
+    }}
+    .suburbs-title {{
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #475569;
+      margin-bottom: 10px;
+    }}
+    .suburb-row {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 5px 0;
+      border-bottom: 1px solid #1e3a5f;
+      font-size: 0.8rem;
+    }}
+    .suburb-row:last-child {{ border-bottom: none; }}
+    .suburb-badge {{
+      background: #0f172a;
+      color: #3b82f6;
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 8px;
+      border: 1px solid #1e3a5f;
+    }}
   </style>
 </head>
 <body>
   <h1>&#9881; Rim Repair Control Panel</h1>
   <p class="sub">Tap a button to switch a feature on or off — takes effect immediately</p>
-  <div class="section-label">Automation Settings</div>
+
+  <div class="section-label">Analytics</div>
+  <div class="analytics-section">
+    <div class="analytics-grid">
+      <div class="a-stat">
+        <div class="a-stat-num" id="an-conversion">—</div>
+        <div class="a-stat-lbl">Conversion Rate (%)</div>
+      </div>
+      <div class="a-stat">
+        <div class="a-stat-num" id="an-confirm-time">—</div>
+        <div class="a-stat-lbl">Avg Confirm Time (hrs)</div>
+      </div>
+      <div class="a-stat">
+        <div class="a-stat-num" id="an-total-created">—</div>
+        <div class="a-stat-lbl">Total Created</div>
+      </div>
+      <div class="a-stat">
+        <div class="a-stat-num" id="an-total-declined">—</div>
+        <div class="a-stat-lbl">Total Declined</div>
+      </div>
+    </div>
+    <div class="suburbs-panel">
+      <div class="suburbs-title">Top 5 Suburbs</div>
+      <div id="an-suburbs"><em style="color:#475569;font-size:0.8rem;">Loading…</em></div>
+    </div>
+  </div>
+
+  {pending_section}
+
+  <div class="section-label" style="margin-top:24px;">Automation Settings</div>
   {cards}
   <p class="footer">rim-repair-booking &bull; changes are saved to database</p>
+
+<script>
+(function() {{
+  var qs = '{qs}';
+  var token = qs ? qs.replace('?token=', '') : '';
+
+  function confirmBooking(id) {{
+    if (!confirm('Confirm booking ' + id + '?')) return;
+    fetch('/admin/api/booking/' + id + '/confirm?token=' + token, {{method: 'POST'}})
+      .then(function(r) {{ return r.json(); }})
+      .then(function(d) {{
+        if (d.ok) {{ alert('Booking ' + id + ' confirmed!'); location.reload(); }}
+        else {{ alert('Error: ' + d.error); }}
+      }});
+  }}
+
+  function declineBooking(id) {{
+    if (!confirm('Decline booking ' + id + '?')) return;
+    fetch('/admin/api/booking/' + id + '/decline?token=' + token, {{method: 'POST'}})
+      .then(function(r) {{ return r.json(); }})
+      .then(function(d) {{
+        if (d.ok) {{ alert('Booking ' + id + ' declined.'); location.reload(); }}
+        else {{ alert('Error: ' + d.error); }}
+      }});
+  }}
+
+  // Expose to global scope for onclick handlers
+  window.confirmBooking = confirmBooking;
+  window.declineBooking = declineBooking;
+
+  // Load analytics
+  fetch('/admin/api/analytics' + (token ? '?token=' + token : ''))
+    .then(function(r) {{ return r.json(); }})
+    .then(function(d) {{
+      if (d.error) return;
+      document.getElementById('an-conversion').textContent    = d.conversion_rate_pct !== undefined ? d.conversion_rate_pct + '%' : '—';
+      document.getElementById('an-confirm-time').textContent  = d.avg_confirm_hours !== null && d.avg_confirm_hours !== undefined ? d.avg_confirm_hours : '—';
+      document.getElementById('an-total-created').textContent = d.total_created !== undefined ? d.total_created : '—';
+      document.getElementById('an-total-declined').textContent= d.total_declined !== undefined ? d.total_declined : '—';
+      var suburbs = d.top_suburbs || [];
+      if (suburbs.length) {{
+        document.getElementById('an-suburbs').innerHTML = suburbs.map(function(s) {{
+          return '<div class="suburb-row"><span>' + s.suburb + '</span><span class="suburb-badge">' + s.count + '</span></div>';
+        }}).join('');
+      }} else {{
+        document.getElementById('an-suburbs').innerHTML = '<div style="color:#475569;font-size:0.8rem;">No data yet</div>';
+      }}
+    }})
+    .catch(function() {{}});
+}})();
+</script>
 </body>
 </html>"""
 
@@ -162,7 +346,31 @@ def admin_dashboard():
             403,
         )
     flags = get_all_flags()
-    return _render_dashboard(flags), 200
+
+    pending = []
+    try:
+        from state_manager import StateManager
+        state = StateManager()
+        with state._conn() as conn:
+            pending_rows = conn.execute(
+                "SELECT * FROM bookings WHERE status='awaiting_owner' ORDER BY created_at DESC"
+            ).fetchall()
+        for r in pending_rows:
+            bd = json.loads(r['booking_data'] or '{}')
+            pending.append({
+                'id':      r['id'],
+                'name':    bd.get('customer_name', '—'),
+                'date':    bd.get('preferred_date', '?'),
+                'time':    bd.get('preferred_time', '?'),
+                'address': bd.get('address') or bd.get('suburb', '?'),
+                'service': (bd.get('service_type') or 'rim_repair').replace('_', ' ').title(),
+                'rims':    bd.get('rim_count') or '?',
+                'phone':   bd.get('customer_phone', ''),
+            })
+    except Exception as e:
+        logger.warning(f"Could not load pending bookings for dashboard: {e}")
+
+    return _render_dashboard(flags, pending), 200
 
 
 # ---------------------------------------------------------------------------
@@ -331,3 +539,132 @@ def api_toggle():
     set_flag(key, new_state)
     logger.info(f"API toggle: '{key}' → {'ON' if new_state else 'OFF'}")
     return jsonify({'success': True, 'enabled': new_state})
+
+
+@admin_bp.route('/admin/api/booking/<booking_id>/confirm', methods=['POST'])
+def api_confirm_booking(booking_id):
+    token = request.args.get('token') or request.json.get('token', '') if request.is_json else ''
+    if not _authorised():
+        return jsonify({'error': 'Unauthorized'}), 401
+    try:
+        from state_manager import StateManager
+        from twilio_handler import handle_owner_confirm
+        state = StateManager()
+        pending = state.get_pending_booking(booking_id)
+        if not pending:
+            return jsonify({'error': f'No pending booking {booking_id}'}), 404
+        handle_owner_confirm(booking_id, pending)
+        return jsonify({'ok': True, 'booking_id': booking_id})
+    except Exception as e:
+        logger.error(f"Dashboard confirm error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@admin_bp.route('/admin/api/booking/<booking_id>/decline', methods=['POST'])
+def api_decline_booking(booking_id):
+    token = request.args.get('token') or (request.json.get('token', '') if request.is_json else '')
+    if not _authorised():
+        return jsonify({'error': 'Unauthorized'}), 401
+    try:
+        from state_manager import StateManager
+        from twilio_handler import handle_owner_decline
+        state = StateManager()
+        pending = state.get_pending_booking(booking_id)
+        if not pending:
+            return jsonify({'error': f'No pending booking {booking_id}'}), 404
+        handle_owner_decline(booking_id, pending)
+        return jsonify({'ok': True, 'booking_id': booking_id})
+    except Exception as e:
+        logger.error(f"Dashboard decline error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@admin_bp.route('/admin/api/analytics', methods=['GET'])
+def api_analytics():
+    if not _authorised():
+        return jsonify({'error': 'Unauthorized'}), 401
+    try:
+        from state_manager import StateManager, _get_conn
+        from datetime import datetime, timezone, timedelta
+
+        state = StateManager()
+        now = datetime.now(timezone.utc)
+
+        # Bookings per week (last 8 weeks)
+        weeks = []
+        for i in range(7, -1, -1):
+            week_start = (now - timedelta(weeks=i+1)).strftime('%Y-%m-%d')
+            week_end = (now - timedelta(weeks=i)).strftime('%Y-%m-%d')
+            with _get_conn() as conn:
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM bookings WHERE status='confirmed' AND confirmed_at >= ? AND confirmed_at < ?",
+                    (week_start, week_end)
+                ).fetchone()[0]
+            weeks.append({'week_start': week_start, 'count': count})
+
+        # Conversion rate
+        with _get_conn() as conn:
+            total_created = conn.execute("SELECT COUNT(*) FROM bookings").fetchone()[0]
+            total_confirmed = conn.execute("SELECT COUNT(*) FROM bookings WHERE status='confirmed'").fetchone()[0]
+            total_declined = conn.execute("SELECT COUNT(*) FROM bookings WHERE status='declined'").fetchone()[0]
+
+        conversion_rate = round(total_confirmed / total_created * 100, 1) if total_created > 0 else 0
+
+        # Top suburbs
+        with _get_conn() as conn:
+            rows = conn.execute(
+                "SELECT booking_data FROM bookings WHERE status='confirmed'"
+            ).fetchall()
+        suburb_counts = {}
+        for row in rows:
+            try:
+                bd = json.loads(row[0])
+                suburb = bd.get('suburb') or bd.get('address', '').split(',')[0].strip()
+                if suburb:
+                    suburb_counts[suburb] = suburb_counts.get(suburb, 0) + 1
+            except Exception:
+                pass
+        top_suburbs = sorted(suburb_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+
+        # Average time to confirm (hours)
+        with _get_conn() as conn:
+            rows = conn.execute(
+                "SELECT created_at, confirmed_at FROM bookings WHERE status='confirmed' AND created_at IS NOT NULL AND confirmed_at IS NOT NULL LIMIT 50"
+            ).fetchall()
+        confirm_times = []
+        for row in rows:
+            try:
+                created = datetime.fromisoformat(row[0])
+                confirmed = datetime.fromisoformat(row[1])
+                hours = (confirmed - created).total_seconds() / 3600
+                if 0 < hours < 168:  # ignore outliers > 1 week
+                    confirm_times.append(hours)
+            except Exception:
+                pass
+        avg_confirm_hours = round(sum(confirm_times) / len(confirm_times), 1) if confirm_times else None
+
+        return jsonify({
+            'bookings_per_week': weeks,
+            'conversion_rate_pct': conversion_rate,
+            'total_created': total_created,
+            'total_confirmed': total_confirmed,
+            'total_declined': total_declined,
+            'top_suburbs': [{'suburb': s, 'count': c} for s, c in top_suburbs],
+            'avg_confirm_hours': avg_confirm_hours,
+        })
+    except Exception as e:
+        logger.error(f"Analytics error: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@admin_bp.route('/admin/api/booking/<booking_id>/events', methods=['GET'])
+def api_booking_events(booking_id):
+    if not _authorised():
+        return jsonify({'error': 'Unauthorized'}), 401
+    try:
+        from state_manager import StateManager
+        state = StateManager()
+        events = state.get_booking_events(booking_id)
+        return jsonify({'booking_id': booking_id, 'events': events})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500

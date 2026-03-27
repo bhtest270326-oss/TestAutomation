@@ -2,7 +2,7 @@ import os
 import time as _time
 import logging
 from datetime import datetime, timedelta, timezone
-from state_manager import StateManager
+from state_manager import StateManager, DB_PATH
 
 try:
     from zoneinfo import ZoneInfo
@@ -35,6 +35,9 @@ def run_scheduled_tasks():
         send_day_prior_reminders()
         send_post_job_review_requests()
         optimize_daily_routes()
+        check_pending_booking_expiry()
+        send_owner_daily_briefing()
+        backup_database_to_email()
     except Exception as e:
         logger.error(f"Scheduler error: {e}", exc_info=True)
 
@@ -427,3 +430,156 @@ def send_post_job_review_requests():
         send_sms(customer_phone, msg)
         state.mark_reminder_sent(booking_id, 'review_request')
         logger.info(f"Review request sent for booking {booking_id}")
+
+
+def check_pending_booking_expiry():
+    """Nudge the owner via SMS for pending bookings older than 48 hours with no response."""
+    state = StateManager()
+    pending = state.get_pending_bookings_with_calendar_events()
+    if not pending:
+        return
+
+    now_utc = datetime.now(timezone.utc)
+
+    for booking in pending:
+        booking_id = booking['id']
+
+        if state.has_reminder_been_sent(booking_id, 'expiry_nudge'):
+            continue
+
+        created_at_str = booking.get('created_at')
+        if not created_at_str:
+            continue
+
+        try:
+            created_at = datetime.fromisoformat(created_at_str)
+            # Ensure timezone-aware for comparison
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+
+        age = now_utc - created_at
+        if age < timedelta(hours=48):
+            continue
+
+        booking_data = booking.get('booking_data', {})
+        customer_name = booking_data.get('customer_name', 'Unknown')
+        preferred_date = booking_data.get('preferred_date', 'unknown date')
+
+        msg = (
+            f"Reminder: Booking {booking_id} for {customer_name} on {preferred_date} "
+            f"still needs your YES or NO. "
+            f"Reply YES {booking_id} or NO {booking_id}"
+        )
+
+        try:
+            send_sms(os.environ['OWNER_MOBILE'], msg)
+            state.mark_reminder_sent(booking_id, 'expiry_nudge')
+            logger.info(f"Expiry nudge sent for booking {booking_id} (age: {age})")
+        except Exception as e:
+            logger.error(f"Failed to send expiry nudge for {booking_id}: {e}")
+
+
+def send_owner_daily_briefing():
+    """At 07:30 Perth time, send the owner an SMS summary of today's jobs."""
+    now = _perth_now()
+    if not (now.hour == 7 and now.minute >= 30 and now.minute < 35):
+        return
+
+    state = StateManager()
+    today = now.strftime('%Y-%m-%d')
+
+    last_sent = state.get_app_state('last_daily_briefing_date')
+    if last_sent == today:
+        return
+
+    from maps_handler import get_job_duration_minutes
+
+    confirmed = state.get_confirmed_bookings()
+
+    jobs = []
+    for booking_id, booking in confirmed.items():
+        if booking.get('status') != 'confirmed':
+            continue
+        booking_data = booking.get('booking_data', {})
+        if booking_data.get('preferred_date') != today:
+            continue
+        jobs.append((booking_id, booking_data))
+
+    if not jobs:
+        return
+
+    # Sort by preferred_time
+    def _sort_key(item):
+        return item[1].get('preferred_time', '00:00')
+
+    jobs.sort(key=_sort_key)
+
+    first_bd = jobs[0][1]
+    first_time = first_bd.get('preferred_time', '?')
+    first_suburb = first_bd.get('suburb') or first_bd.get('address', '?')
+
+    last_bd = jobs[-1][1]
+    last_time_str = last_bd.get('preferred_time', '09:00')
+    try:
+        last_start = datetime.strptime(f"{today} {last_time_str}", "%Y-%m-%d %H:%M")
+        duration = get_job_duration_minutes(last_bd)
+        finish_dt = last_start + timedelta(minutes=duration)
+        finish_time = finish_dt.strftime('%H:%M')
+    except Exception:
+        finish_time = '?'
+
+    msg = (
+        f"Today: {len(jobs)} job(s). "
+        f"First at {first_time} ({first_suburb}). "
+        f"Est. finish ~{finish_time}. - Rim Repair"
+    )
+
+    try:
+        send_sms(os.environ['OWNER_MOBILE'], msg)
+        state.set_app_state('last_daily_briefing_date', today)
+        logger.info(f"Daily briefing sent for {today}: {len(jobs)} job(s)")
+    except Exception as e:
+        logger.error(f"Failed to send daily briefing: {e}")
+
+
+def backup_database_to_email():
+    """At 02:00 Perth time, email the SQLite database as an attachment to the owner."""
+    now = _perth_now()
+    if not (now.hour == 2 and now.minute < 5):
+        return
+
+    state = StateManager()
+    today = now.strftime('%Y-%m-%d')
+
+    last_backup = state.get_app_state('last_backup_date')
+    if last_backup == today:
+        return
+
+    try:
+        from google_auth import get_gmail_service
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.base import MIMEBase
+        from email import encoders
+        import base64
+
+        service = get_gmail_service()
+        msg = MIMEMultipart()
+        msg['to'] = os.environ.get('OWNER_EMAIL', '')
+        msg['subject'] = f"Rim Repair DB Backup — {today}"
+
+        with open(DB_PATH, 'rb') as f:
+            part = MIMEBase('application', 'octet-stream')
+            part.set_payload(f.read())
+            encoders.encode_base64(part)
+            part.add_header('Content-Disposition', f'attachment; filename="booking_state_{today}.db"')
+            msg.attach(part)
+
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        service.users().messages().send(userId='me', body={'raw': raw}).execute()
+
+        state.set_app_state('last_backup_date', today)
+        logger.info(f"Database backup emailed for {today}")
+    except Exception as e:
+        logger.error(f"Database backup failed: {e}", exc_info=True)

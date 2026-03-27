@@ -1,6 +1,7 @@
 import os
 import logging
 import math
+import time
 import requests
 from datetime import datetime, timedelta
 from itertools import permutations as _perms
@@ -29,6 +30,35 @@ TRAVEL_BUFFER_MINUTES = 10  # padding added on top of Maps estimate
 # Job duration table (minutes) keyed by number of rims
 _RIM_DURATION: dict[int, int] = {1: 120, 2: 180, 3: 240, 4: 300}
 _DEFAULT_DURATION = 120  # fallback when rim count unknown
+
+# Distance matrix in-memory cache
+_matrix_cache: dict = {}       # key -> matrix
+_matrix_cache_ts: dict = {}    # key -> float timestamp
+_MATRIX_CACHE_TTL = 1800       # 30 minutes
+
+# Known out-of-area Western Australian locations (outside Perth metro)
+_OUT_OF_AREA_KEYWORDS = [
+    'mandurah', 'bunbury', 'busselton', 'margaret river', 'geraldton',
+    'albany', 'kalgoorlie', 'boulder', 'broome', 'port hedland',
+    'karratha', 'newman', 'esperance', 'merredin', 'northam',
+    'york', 'narrogin', 'collie', 'harvey', 'waroona',
+    'pinjarra', 'dwellingup', 'mundaring', 'toodyay',
+]
+
+
+def is_within_service_area(address: str) -> bool:
+    """Return True if address appears to be within Perth metropolitan area.
+
+    Returns True by default (accept bookings) — only rejects clearly regional WA addresses.
+    """
+    if not address:
+        return True
+    lower = address.lower()
+    for kw in _OUT_OF_AREA_KEYWORDS:
+        if kw in lower:
+            logger.info(f"Service area check: '{address}' matches out-of-area keyword '{kw}'")
+            return False
+    return True
 
 
 def get_job_duration_minutes(booking_data: dict) -> int:
@@ -114,6 +144,11 @@ def get_distance_matrix(addresses):
     if not GOOGLE_MAPS_API_KEY or n < 2:
         return fallback
 
+    key = (tuple(sorted(addresses)),)
+    if key in _matrix_cache and time.time() - _matrix_cache_ts.get(key, 0) < _MATRIX_CACHE_TTL:
+        logger.info(f"Distance matrix cache hit ({n} locations)")
+        return _matrix_cache[key]
+
     try:
         addrs_ctx = [f"{a}, Perth WA, Australia" for a in addresses]
         resp = requests.get(
@@ -145,6 +180,8 @@ def get_distance_matrix(addresses):
                     row_mins.append(30)
             matrix.append(row_mins)
 
+        _matrix_cache[key] = matrix
+        _matrix_cache_ts[key] = time.time()
         logger.info(f"Distance matrix fetched: {n}×{n} locations")
         return matrix
 

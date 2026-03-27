@@ -14,6 +14,65 @@ from feature_flags import get_flag
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Cancellation / reschedule keyword detection
+# ---------------------------------------------------------------------------
+
+_CANCEL_KEYWORDS = [
+    'cancel', 'cancellation', 'no longer need', "don't need", "dont need",
+    'called off', 'not going ahead',
+]
+
+_RESCHEDULE_KEYWORDS = [
+    'reschedule', 'change date', 'change time', 'different day',
+    'move my booking', 'postpone',
+]
+
+
+def _detect_cancel_intent(text: str) -> bool:
+    lower = text.lower()
+    return any(kw in lower for kw in _CANCEL_KEYWORDS)
+
+
+def _detect_reschedule_intent(text: str) -> bool:
+    lower = text.lower()
+    return any(kw in lower for kw in _RESCHEDULE_KEYWORDS)
+
+
+# ---------------------------------------------------------------------------
+# Duplicate / repeat customer detection
+# ---------------------------------------------------------------------------
+
+def _check_duplicate_booking(state, customer_email, booking_data):
+    """Return existing booking info if same customer+vehicle seen in last 30 days, else None."""
+    if not customer_email:
+        return None
+    from datetime import datetime, timezone, timedelta
+    import json
+    from state_manager import _get_conn
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    with _get_conn() as conn:
+        rows = conn.execute(
+            """SELECT id, booking_data, status, created_at FROM bookings
+               WHERE customer_email = ? AND created_at > ?
+               ORDER BY created_at DESC LIMIT 5""",
+            (customer_email, cutoff)
+        ).fetchall()
+    vehicle_make = (booking_data.get('vehicle_make') or '').lower().strip()
+    vehicle_model = (booking_data.get('vehicle_model') or '').lower().strip()
+    for row in rows:
+        try:
+            bd = json.loads(row['booking_data'])
+            if (bd.get('vehicle_make', '').lower().strip() == vehicle_make and
+                    bd.get('vehicle_model', '').lower().strip() == vehicle_model and
+                    vehicle_make):
+                return {'id': row['id'], 'status': row['status'], 'created_at': row['created_at']}
+        except Exception:
+            pass
+    return None
+
+
 def get_email_body(message):
     payload = message.get('payload', {})
     body_data = payload.get('body', {}).get('data')
@@ -121,7 +180,9 @@ def _process_single_message(service, state, msg_id):
             message_id_header=message_id_header
         )
     elif thread_id and state.thread_has_active_booking(thread_id):
-        logger.info(f"Thread {thread_id} already has an active booking, skipping")
+        # Reply on a thread that already has an active/confirmed booking —
+        # check for cancellation or reschedule intent
+        _handle_active_booking_reply(state, thread_id, body, customer_email, msg_id)
     else:
         # New thread — classify before running any booking workflow
         if not is_booking_request(body, subject):
@@ -134,6 +195,76 @@ def _process_single_message(service, state, msg_id):
         )
 
     state.mark_email_processed(msg_id)
+
+
+def _handle_active_booking_reply(state, thread_id, body_text, customer_email, msg_id):
+    """Handle a customer reply on a thread that already has a confirmed/pending booking.
+
+    Detects cancellation and reschedule intent and forwards to the owner via SMS.
+    """
+    try:
+        from state_manager import _get_conn
+        import json as _json
+        with _get_conn() as conn:
+            row = conn.execute(
+                """SELECT id, booking_data, status FROM bookings
+                   WHERE thread_id = ? AND status IN ('awaiting_owner', 'confirmed')
+                   ORDER BY created_at DESC LIMIT 1""",
+                (thread_id,)
+            ).fetchone()
+
+        if not row:
+            logger.info(f"Thread {thread_id} active booking not found — skipping reply")
+            return
+
+        booking_id = row['id']
+        booking = _json.loads(row['booking_data'])
+        status = row['status']
+        customer_name = booking.get('customer_name', 'Customer')
+
+        if _detect_cancel_intent(body_text):
+            logger.info(f"Cancellation intent detected on thread {thread_id} (booking {booking_id})")
+            try:
+                from twilio_handler import send_sms
+                send_sms(
+                    os.environ['OWNER_MOBILE'],
+                    f"CANCELLATION REQUEST: {customer_name} (booking {booking_id}) wants to cancel."
+                    f" Reply to manage manually."
+                )
+            except Exception as e:
+                logger.error(f"Could not send cancellation SMS to owner: {e}")
+            try:
+                state.log_booking_event(
+                    booking_id, 'cancellation_requested', actor='customer',
+                    details={'message_snippet': body_text[:200]}
+                )
+            except Exception as e:
+                logger.error(f"Could not log cancellation event: {e}")
+
+        elif _detect_reschedule_intent(body_text):
+            logger.info(f"Reschedule intent detected on thread {thread_id} (booking {booking_id})")
+            try:
+                from twilio_handler import send_sms
+                send_sms(
+                    os.environ['OWNER_MOBILE'],
+                    f"RESCHEDULE REQUEST: {customer_name} (booking {booking_id}) wants to reschedule."
+                    f" Reply to manage manually."
+                )
+            except Exception as e:
+                logger.error(f"Could not send reschedule SMS to owner: {e}")
+            try:
+                state.log_booking_event(
+                    booking_id, 'reschedule_requested', actor='customer',
+                    details={'message_snippet': body_text[:200]}
+                )
+            except Exception as e:
+                logger.error(f"Could not log reschedule event: {e}")
+
+        else:
+            logger.info(f"Thread {thread_id} has active booking {booking_id} — reply has no actionable intent, skipping")
+
+    except Exception as e:
+        logger.error(f"Error handling active booking reply on thread {thread_id}: {e}", exc_info=True)
 
 
 def poll_gmail():
@@ -297,6 +428,14 @@ def _assign_best_slot(booking_data, state):
             existing_notes = booking_data.get('notes') or ''
             booking_data['notes'] = f"{pref_note}. {existing_notes}".strip('. ') if existing_notes else pref_note
 
+        # If the slot was advanced to a different date, add a clear waitlist note
+        if found_date != target_date:
+            logger.info(f"Booking slot advanced: customer wanted {target_date}, assigned {found_date}")
+            existing_notes = booking_data.get('notes', '') or ''
+            waitlist_note = f"Requested {target_date} — assigned {found_date} (original date was full)."
+            booking_data['notes'] = f"{waitlist_note} {existing_notes}".strip() if existing_notes else waitlist_note
+            # preferred_date updated below
+
         booking_data['preferred_date'] = found_date
         booking_data['preferred_time'] = found_time
         logger.info(f"Slot assigned: {found_date} {found_time} (preferred {preferred_dates}, original time {original_time})")
@@ -316,10 +455,58 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
         logger.error(f"Extraction returned no data for msg {msg_id} — skipping to allow retry")
         return
 
+    # --- AI Confidence Gating ---
+    try:
+        confidence = booking_data.get('confidence', 'medium')
+        if confidence == 'low':
+            logger.warning(f"Low-confidence extraction for email from {customer_email} — flagging for owner review")
+            existing_notes = booking_data.get('notes', '') or ''
+            booking_data['notes'] = f"LOW AI CONFIDENCE — please verify details. {existing_notes}".strip()
+    except Exception as e:
+        logger.error(f"Confidence gating error: {e}")
+        confidence = 'medium'
+
+    # --- Service Area Validation ---
+    try:
+        from maps_handler import is_within_service_area
+        address_to_check = booking_data.get('address') or booking_data.get('suburb') or ''
+        if address_to_check and not is_within_service_area(address_to_check):
+            logger.info(f"Booking rejected: address '{address_to_check}' outside service area")
+            try:
+                name = booking_data.get('customer_name', 'there')
+                decline_body = f"""Hi {name},
+
+Thank you for getting in touch with Rim Repair.
+
+Unfortunately, your location appears to be outside our current service area (Perth metropolitan area). We are unable to accommodate bookings in this area at this time.
+
+We appreciate your interest and apologise for the inconvenience.
+
+Kind regards,
+Rim Repair Team"""
+                decline_msg = MIMEText(decline_body)
+                decline_msg['to'] = customer_email
+                decline_msg['subject'] = 'Re: Your Rim Repair Enquiry'
+                if message_id_header:
+                    decline_msg['In-Reply-To'] = message_id_header
+                    decline_msg['References'] = message_id_header
+                raw = base64.urlsafe_b64encode(decline_msg.as_bytes()).decode()
+                send_body = {'raw': raw}
+                if thread_id:
+                    send_body['threadId'] = thread_id
+                service.users().messages().send(userId='me', body=send_body).execute()
+            except Exception as e:
+                logger.error(f"Could not send out-of-area decline email: {e}")
+            state.mark_email_processed(msg_id)
+            return
+    except Exception as e:
+        logger.error(f"Service area check error: {e}")
+
     if needs_clarification:
         if get_flag('flag_auto_email_replies'):
             send_clarification_email(service, customer_email, subject, missing_fields,
-                                      thread_id=thread_id, message_id_header=message_id_header)
+                                      thread_id=thread_id, message_id_header=message_id_header,
+                                      booking_data=booking_data)
         else:
             logger.info(f"Auto email replies disabled — clarification not sent to {customer_email}")
         state.create_pending_clarification(
@@ -335,6 +522,22 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
             pass
         logger.info(f"Clarification sent to {customer_email}, thread {thread_id}")
     else:
+        # --- Duplicate / Repeat Customer Detection ---
+        try:
+            duplicate = _check_duplicate_booking(state, customer_email, booking_data)
+            if duplicate:
+                logger.warning(
+                    f"Duplicate booking detected: same customer+vehicle as booking "
+                    f"{duplicate['id']} ({duplicate['status']}) created {duplicate['created_at']}"
+                )
+                existing_notes = booking_data.get('notes', '') or ''
+                booking_data['notes'] = (
+                    f"POSSIBLE DUPLICATE: Same vehicle as booking {duplicate['id']} "
+                    f"({duplicate['status']}). {existing_notes}"
+                ).strip()
+        except Exception as e:
+            logger.error(f"Duplicate check error: {e}")
+
         _assign_best_slot(booking_data, state)
         pending_id = state.create_pending_booking(
             booking_data=booking_data,
@@ -344,6 +547,16 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
             msg_id=msg_id,
             thread_id=thread_id
         )
+
+        # Log creation event with confidence level
+        try:
+            state.log_booking_event(
+                pending_id, 'created', actor='ai',
+                details={'confidence': confidence, 'customer_email': customer_email}
+            )
+        except Exception as e:
+            logger.error(f"Could not log booking creation event: {e}")
+
         send_owner_confirmation_request(pending_id, booking_data)
         try:
             label_awaiting_confirmation(service, msg_id)
@@ -418,7 +631,8 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
         # Still within attempt limit — send another clarification
         if get_flag('flag_auto_email_replies'):
             send_clarification_email(service, customer_email, subject, still_missing,
-                                      thread_id=thread_id, message_id_header=message_id_header)
+                                      thread_id=thread_id, message_id_header=message_id_header,
+                                      booking_data=merged_data)
         else:
             logger.info(f"Auto email replies disabled — follow-up clarification not sent to {customer_email}")
         state.update_clarification_booking_data(existing_pending['id'], merged_data, still_missing)
@@ -447,25 +661,64 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
         logger.info(f"Clarification complete, owner confirmation sent for booking {pending_id}")
 
 
-def send_clarification_email(service, to_email, original_subject, missing_fields, thread_id=None, message_id_header=None):
-    if len(missing_fields) == 1:
-        fields_intro = "To complete your booking, we just need one more detail:"
+def send_clarification_email(service, to_email, original_subject, missing_fields,
+                              thread_id=None, message_id_header=None, booking_data=None):
+    # Build a summary of what was already captured so the customer knows we got their info
+    captured_parts = []
+    try:
+        if booking_data:
+            if booking_data.get('vehicle_make') and booking_data.get('vehicle_model'):
+                vehicle_str = f"your {booking_data.get('vehicle_year', '')} {booking_data['vehicle_make']} {booking_data['vehicle_model']}".strip()
+                captured_parts.append(vehicle_str)
+            elif booking_data.get('vehicle_make'):
+                captured_parts.append(f"your {booking_data['vehicle_make']}")
+            location = booking_data.get('address') or booking_data.get('suburb')
+            if location:
+                captured_parts.append(f"at {location}")
+            if booking_data.get('preferred_date'):
+                captured_parts.append(f"on {booking_data['preferred_date']}")
+    except Exception:
+        captured_parts = []
+
+    if captured_parts:
+        captured_summary = "We've noted " + ", ".join(captured_parts) + "."
     else:
-        fields_intro = "To complete your booking, we just need a few more details:"
+        captured_summary = ""
 
-    fields_text = '\n'.join(f"  - {f}" for f in missing_fields)
+    name = 'there'
+    try:
+        if booking_data and booking_data.get('customer_name'):
+            name = booking_data['customer_name'].split()[0]
+    except Exception:
+        pass
 
-    body = f"""Hi,
+    fields_list = "\n".join(f"  - {f}" for f in missing_fields)
 
-Thank you for getting in touch with Rim Repair.
+    if captured_summary:
+        body = f"""Hi {name},
 
-{fields_intro}
+Thank you for getting in touch with Rim Repair!
 
-{fields_text}
+{captured_summary}
 
-Once we have this information, we'll confirm your booking straight away.
+To complete your booking, we just need a few more details:
 
-If you have any questions in the meantime, please don't hesitate to reply to this email.
+{fields_list}
+
+Once we have this information, we'll get your booking confirmed right away.
+
+Kind regards,
+Rim Repair Team"""
+    else:
+        body = f"""Hi {name},
+
+Thank you for getting in touch with Rim Repair!
+
+To complete your booking, we just need a few more details:
+
+{fields_list}
+
+Once we have this information, we'll get your booking confirmed right away.
 
 Kind regards,
 Rim Repair Team"""

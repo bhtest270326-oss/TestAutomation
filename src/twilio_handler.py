@@ -88,12 +88,84 @@ def _send_calendar_invite_fallback(pending_id, booking_data, reason="SMS unavail
     else:
         logger.error(f"Could not create calendar invite for booking {pending_id}")
 
+def _handle_customer_sms(from_number, body_text, message_sid, state):
+    """Handle an inbound SMS from a customer (not the owner).
+
+    Looks up the customer by phone number in confirmed bookings.
+    If found, forwards the message to the owner with booking context.
+    Sends a brief auto-acknowledgement to the customer.
+    """
+    if not get_flag('flag_auto_sms_customer'):
+        return  # only respond if customer SMS feature is enabled
+
+    try:
+        from state_manager import _get_conn
+        import json
+
+        normalised = normalise_phone(from_number)
+
+        # Search confirmed and pending bookings for this phone number
+        matched_booking_id = None
+        matched_name = None
+        matched_date = None
+
+        with _get_conn() as conn:
+            rows = conn.execute(
+                "SELECT id, booking_data, status FROM bookings WHERE status IN ('confirmed', 'awaiting_owner') ORDER BY created_at DESC LIMIT 50"
+            ).fetchall()
+
+        for row in rows:
+            try:
+                bd = json.loads(row['booking_data'])
+                stored_phone = normalise_phone(bd.get('customer_phone', '') or '')
+                if stored_phone and stored_phone == normalised:
+                    matched_booking_id = row['id']
+                    matched_name = bd.get('customer_name', 'Customer')
+                    matched_date = bd.get('preferred_date', '')
+                    matched_status = row['status']
+                    break
+            except Exception:
+                pass
+
+        if matched_booking_id:
+            # Forward to owner with context
+            owner_msg = (
+                f"📱 Customer SMS — {matched_name} (booking {matched_booking_id}, {matched_date}):\n"
+                f"\"{body_text[:160]}\""
+            )
+            send_sms(os.environ['OWNER_MOBILE'], owner_msg)
+
+            # Auto-acknowledge to customer
+            ack_msg = (
+                f"Hi {matched_name}, thanks for your message — we've received it and will be in touch shortly. "
+                f"- Rim Repair Team"
+            )
+            send_sms(from_number, ack_msg)
+
+            # Log the event
+            try:
+                state.log_booking_event(matched_booking_id, 'customer_sms_received', actor='customer',
+                    details={'message_snippet': body_text[:200], 'from': normalised})
+            except Exception:
+                pass
+
+            logger.info(f"Customer SMS from {normalised} forwarded to owner (booking {matched_booking_id})")
+        else:
+            # Unknown sender — just log, don't respond
+            logger.info(f"SMS from unknown number {normalised} — not in any active booking")
+
+    except Exception as e:
+        logger.error(f"Customer SMS handling error: {e}", exc_info=True)
+
+
 def process_single_sms_webhook(from_number, body_text, message_sid):
     state = StateManager()
     if state.is_sms_processed(message_sid):
         return
     owner_mobile = normalise_phone(os.environ.get('OWNER_MOBILE', ''))
     if normalise_phone(from_number) != owner_mobile:
+        # This is NOT from the owner — check if it's from a known customer
+        _handle_customer_sms(from_number, body_text, message_sid, state)
         state.mark_sms_processed(message_sid)
         return
     body = body_text.strip()
@@ -150,6 +222,8 @@ def poll_sms_replies():
             if state.is_sms_processed(msg.sid):
                 continue
             if normalise_phone(msg.from_) != owner_mobile:
+                # This is NOT from the owner — check if it's from a known customer
+                _handle_customer_sms(msg.from_, msg.body, msg.sid, state)
                 state.mark_sms_processed(msg.sid)
                 continue
             body = msg.body.strip()
@@ -230,6 +304,28 @@ def handle_owner_confirm(pending_id, pending):
     send_sms(os.environ['OWNER_MOBILE'], f"Booking {pending_id} confirmed. Calendar event created. Customer notified.")
     logger.info(f"Booking {pending_id} fully confirmed")
 
+    # Sync to Google Sheets
+    if get_flag('flag_google_sheets_sync'):
+        try:
+            from google_sheets import append_booking_row
+            # Re-fetch the booking after confirm so confirmed_at is populated
+            confirmed = state.get_confirmed_bookings()
+            confirmed_booking = confirmed.get(pending_id, {})
+            if not confirmed_booking:
+                # Fallback: build from what we have
+                confirmed_booking = dict(pending)
+                confirmed_booking['status'] = 'confirmed'
+            append_booking_row(pending_id, confirmed_booking)
+        except Exception as e:
+            logger.error(f"Google Sheets sync error for booking {pending_id}: {e}")
+
+    try:
+        state.log_booking_event(pending_id, 'confirmed', actor='owner_sms',
+            details={'customer_notified_sms': bool(customer_phone and get_flag('flag_auto_sms_customer')),
+                     'customer_notified_email': bool(customer_email and get_flag('flag_auto_email_customer'))})
+    except Exception:
+        pass
+
 def handle_owner_decline(pending_id, pending):
     state = StateManager()
     booking_data = pending['booking_data']
@@ -255,6 +351,12 @@ def handle_owner_decline(pending_id, pending):
         except Exception as e:
             logger.error(f"Label update error on decline: {e}")
     send_sms(os.environ['OWNER_MOBILE'], f"Booking {pending_id} declined. Customer notified.")
+
+    try:
+        state.log_booking_event(pending_id, 'declined', actor='owner_sms',
+            details={'customer_notified': bool(customer_phone or customer_email)})
+    except Exception:
+        pass
 
 def _extract_date_from_correction(text):
     match = re.search(r'\b(\d{1,2})/(\d{1,2})\b', text)
@@ -297,6 +399,12 @@ def handle_owner_correction(pending_id, pending, correction_text):
     msg = f"Updated booking:\n\n{format_booking_for_owner(updated_booking)}\n\n[ID:{pending_id}]"
     send_sms(os.environ['OWNER_MOBILE'], msg)
     logger.info(f"Booking {pending_id} updated with correction, re-sent for confirmation")
+
+    try:
+        state.log_booking_event(pending_id, 'data_updated', actor='owner_sms',
+            details={'correction_text': correction_text[:200]})
+    except Exception:
+        pass
 
 def build_customer_confirmation_sms(booking_data):
     date = _fmt_date(booking_data.get('preferred_date', 'TBC'))
