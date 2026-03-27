@@ -559,10 +559,17 @@ def handle_availability_inquiry(msg_id, thread_id, subject, body, customer_email
         state.mark_email_processed(msg_id)
         return
 
-    # Try to extract service details to get the right duration
-    # Use a lightweight extraction — we only care about service_type and num_rims
+    # Extract whatever details the customer already provided in their first email.
+    # This fixes two bugs: (a) we were assigning the raw tuple to booking_data instead
+    # of unpacking it, and (b) we need the missing_fields list to show only what's
+    # still needed, and to store a pending clarification so the customer's reply
+    # correctly merges with what was already extracted.
+    booking_data = {}
+    missing_fields = []
     try:
-        booking_data = extract_booking_details(subject, body)
+        booking_data, missing_fields, _ = extract_booking_details(body, subject, customer_email)
+        if not booking_data:
+            booking_data = {}
         duration = get_job_duration_minutes(booking_data)
 
         # Build service description for the email
@@ -581,7 +588,6 @@ def handle_availability_inquiry(msg_id, thread_id, subject, body, customer_email
             duration = 120  # default: 1 rim / 2 hours
 
         customer_name = booking_data.get('customer_name') or 'there'
-        # Use first name only
         first_name = customer_name.split()[0].title() if customer_name != 'there' else 'there'
 
     except Exception as e:
@@ -600,11 +606,13 @@ def handle_availability_inquiry(msg_id, thread_id, subject, body, customer_email
 
     # Format and send the response
     try:
-        from email_utils import send_customer_email, build_email_html
+        from email_utils import send_customer_email
 
-        # format_availability_response returns inner HTML content; wrap it in the brand shell
-        inner_html = format_availability_response(first_name, availability, service_description)
-        email_body = build_email_html(inner_html)
+        # Pass only the fields still missing — already-provided details won't appear in the list
+        inner_html = format_availability_response(
+            first_name, availability, service_description,
+            missing_fields=missing_fields if missing_fields else None
+        )
 
         service = get_gmail_service()
         reply_subject = subject if subject.lower().startswith('re:') else f"Re: {subject}"
@@ -612,6 +620,17 @@ def handle_availability_inquiry(msg_id, thread_id, subject, body, customer_email
         send_customer_email(service, customer_email, reply_subject, inner_html, thread_id=thread_id)
 
         logger.info(f"Availability response sent to {customer_email} ({service_description}, {duration} min)")
+
+        # Store a pending clarification so the customer's reply is routed to
+        # handle_clarification_reply, which merges with the already-extracted data.
+        # This also ensures only still-missing fields are requested on follow-up.
+        still_needed = missing_fields + ['your preferred available day'] if missing_fields else ['your preferred available day']
+        state.create_pending_clarification(
+            booking_data=booking_data,
+            customer_email=customer_email,
+            thread_id=thread_id,
+            missing_fields=still_needed,
+        )
 
         # Apply 'Processed' Gmail label
         try:
