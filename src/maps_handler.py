@@ -2,11 +2,45 @@ import os
 import logging
 import math
 import time
+import datetime as _dt_mod
 import requests
 from datetime import datetime, timedelta
 from itertools import permutations as _perms
 
 logger = logging.getLogger(__name__)
+
+# WA Public Holidays — update annually
+_WA_PUBLIC_HOLIDAYS: set = {
+    # 2026
+    _dt_mod.date(2026, 1, 1),   # New Year's Day
+    _dt_mod.date(2026, 1, 26),  # Australia Day
+    _dt_mod.date(2026, 3, 2),   # Labour Day (WA)
+    _dt_mod.date(2026, 4, 3),   # Good Friday
+    _dt_mod.date(2026, 4, 4),   # Easter Saturday
+    _dt_mod.date(2026, 4, 6),   # Easter Monday
+    _dt_mod.date(2026, 4, 25),  # Anzac Day
+    _dt_mod.date(2026, 6, 1),   # WA Day
+    _dt_mod.date(2026, 9, 28),  # Queen's Birthday (WA)
+    _dt_mod.date(2026, 12, 25), # Christmas Day
+    _dt_mod.date(2026, 12, 26), # Boxing Day
+    # 2027
+    _dt_mod.date(2027, 1, 1),   # New Year's Day
+    _dt_mod.date(2027, 1, 26),  # Australia Day
+    _dt_mod.date(2027, 3, 1),   # Labour Day (WA)
+    _dt_mod.date(2027, 3, 26),  # Good Friday
+    _dt_mod.date(2027, 3, 27),  # Easter Saturday
+    _dt_mod.date(2027, 3, 29),  # Easter Monday
+    _dt_mod.date(2027, 4, 26),  # Anzac Day (observed)
+    _dt_mod.date(2027, 6, 7),   # WA Day
+    _dt_mod.date(2027, 9, 27),  # Queen's Birthday (WA)
+    _dt_mod.date(2027, 12, 25), # Christmas Day
+    _dt_mod.date(2027, 12, 27), # Boxing Day (observed)
+}
+
+
+def _is_business_day(d: _dt_mod.date) -> bool:
+    """Return True if d is a weekday that is not a WA public holiday."""
+    return d.weekday() < 5 and d not in _WA_PUBLIC_HOLIDAYS
 
 
 def _ceil_15(dt):
@@ -325,8 +359,8 @@ def find_next_available_slot(target_date_str, new_address, day_bookings,
         logger.warning(f"find_next_available_slot: invalid date '{target_date_str}', defaulting to today")
         target_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
-    # Advance past weekends
-    while target_date.weekday() >= 5:
+    # Advance past weekends and WA public holidays
+    while not _is_business_day(target_date.date()):
         target_date += timedelta(days=1)
     target_date_str = target_date.strftime("%Y-%m-%d")
 
@@ -391,9 +425,9 @@ def find_next_available_slot(target_date_str, new_address, day_bookings,
         if candidate_end <= day_end:
             return target_date_str, candidate.strftime("%H:%M")
 
-    # No room today — move to next business day
+    # No room today — move to next business day (skipping weekends and WA public holidays)
     next_day = target_date + timedelta(days=1)
-    while next_day.weekday() >= 5:
+    while not _is_business_day(next_day.date()):
         next_day += timedelta(days=1)
     logger.info(f"No slot available on {target_date_str}, advancing to {next_day.strftime('%Y-%m-%d')}")
     return next_day.strftime("%Y-%m-%d"), day_start.strftime("%H:%M")
@@ -436,11 +470,11 @@ def get_week_availability(duration_minutes: int, from_date_str: str = None,
     else:
         start = _perth_now_local().replace(hour=0, minute=0, second=0, microsecond=0)
 
-    # Collect next 5 business days (Mon–Fri) starting from start date
+    # Collect next 5 business days (Mon–Fri, excluding WA public holidays) starting from start date
     business_days = []
     cursor = start
     while len(business_days) < 5:
-        if cursor.weekday() < 5:  # 0=Mon … 4=Fri
+        if _is_business_day(cursor.date()):
             business_days.append(cursor)
         cursor += timedelta(days=1)
 

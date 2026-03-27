@@ -402,11 +402,12 @@ For preferred_date and alternative_dates:
 - "Tuesday" or "next Tuesday" means the very next Tuesday after today. If today IS Tuesday, it means today. Never skip to the following week unless the customer says "the week after" or "in two weeks".
 - When a customer names SPECIFIC days as options (e.g. "Tuesday or Wednesday", "Monday, Wednesday or Friday"), set preferred_date to the EARLIEST of those days (as actual YYYY-MM-DD dates) and put the remaining days in alternative_dates in order. ONLY include days the customer explicitly named — never add extra days they did not mention.
 - Double-check your dates: if today is Friday 27 March 2026 and the customer says "Tuesday or Wednesday", the answer is preferred_date=2026-03-31, alternative_dates=["2026-04-01"]. Not April 2. Not any other day.
-- If they give a range like "anytime next week" or "any day next week", set preferred_date to the first weekday of that range and leave alternative_dates empty
+- Only set preferred_date if the customer names a specific date (e.g. "March 31", "the 5th") or a specific named day (e.g. "next Thursday", "this Friday", "Tuesday"). Never infer or assume a date from a vague timeframe.
+- If the customer says anything vague — "anytime next week", "as soon as possible", "whenever you're free", "any day", "next week", or similar — set preferred_date to null and leave alternative_dates empty. The system will ask for a specific date separately.
 - Never pick a day of the week that the customer did not explicitly mention or imply
 - If they say "morning" use 09:00, "afternoon" use 13:00, "end of day" use 16:00
 - If they give a time window like "between 9am and 5pm", use 09:00 as preferred_time and note the window in notes
-- Only mark preferred_date as missing if NO date or timeframe is mentioned at all
+- Mark preferred_date as missing (null) if the customer gives no date, a vague timeframe, or says "any time"
 
 Return ONLY the JSON object, no other text."""
 
