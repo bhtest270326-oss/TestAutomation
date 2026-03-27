@@ -31,7 +31,7 @@ def get_email_body(message):
 def get_email_headers(message):
     headers = {}
     for h in message.get('payload', {}).get('headers', []):
-        if h['name'] in ('From', 'Subject', 'Reply-To'):
+        if h['name'] in ('From', 'Subject', 'Reply-To', 'Message-ID'):
             headers[h['name']] = h['value']
     return headers
 
@@ -77,6 +77,7 @@ def poll_gmail():
             headers = get_email_headers(message)
             from_header = headers.get('From', '')
             subject = headers.get('Subject', '(no subject)')
+            message_id_header = headers.get('Message-ID', '')
             customer_email = extract_email_address(from_header)
             body = get_email_body(message)
             thread_id = message.get('threadId')
@@ -99,7 +100,7 @@ def poll_gmail():
             else:
                 handle_new_enquiry(
                     service, state, msg_id, thread_id,
-                    body, subject, customer_email
+                    body, subject, customer_email, message_id_header
                 )
 
             state.mark_email_processed(msg_id)
@@ -110,15 +111,15 @@ def poll_gmail():
         logger.error(f"Gmail poll error: {e}", exc_info=True)
 
 
-def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, customer_email):
+def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, customer_email, message_id_header=None):
     """Process a brand new booking enquiry."""
     booking_data, missing_fields, needs_clarification = extract_booking_details(
         body, subject, customer_email
     )
 
     if needs_clarification:
-        send_clarification_email(service, customer_email, subject, missing_fields)
-        # Store partial booking data with thread_id so reply can merge into it
+        send_clarification_email(service, customer_email, subject, missing_fields,
+                                  thread_id=thread_id, message_id_header=message_id_header)
         state.create_pending_clarification(
             booking_data=booking_data,
             customer_email=customer_email,
@@ -201,7 +202,7 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
         logger.info(f"Clarification complete, owner confirmation sent for booking {pending_id}")
 
 
-def send_clarification_email(service, to_email, original_subject, missing_fields):
+def send_clarification_email(service, to_email, original_subject, missing_fields, thread_id=None, message_id_header=None):
     if len(missing_fields) == 1:
         fields_intro = "To complete your booking, we just need one more detail:"
     else:
@@ -224,7 +225,6 @@ If you have any questions in the meantime, please don't hesitate to reply to thi
 Kind regards,
 Rim Repair Team"""
 
-    # Keep subject as Re: to stay in same thread
     if not original_subject.startswith('Re:'):
         subject = f"Re: {original_subject}"
     else:
@@ -234,5 +234,13 @@ Rim Repair Team"""
     message['to'] = to_email
     message['subject'] = subject
 
+    if message_id_header:
+        message['In-Reply-To'] = message_id_header
+        message['References'] = message_id_header
+
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-    service.users().messages().send(userId='me', body={'raw': raw}).execute()
+    send_body = {'raw': raw}
+    if thread_id:
+        send_body['threadId'] = thread_id
+
+    service.users().messages().send(userId='me', body=send_body).execute()

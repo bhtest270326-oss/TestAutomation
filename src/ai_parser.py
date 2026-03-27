@@ -38,8 +38,12 @@ Return ONLY a JSON object with this exact structure:
 Required fields are: customer_name, address (or suburb), preferred_date, service_type.
 customer_phone is required if no email is available.
 
-For preferred_date, interpret relative dates like "tomorrow", "next Tuesday" etc based on today's date.
-For preferred_time, if they say "morning" use 09:00, "afternoon" use 13:00, "end of day" use 16:00.
+For preferred_date:
+- Interpret relative dates like "tomorrow", "next Tuesday" based on today's date
+- If they give a range like "anytime next week" or "any day next week", pick the first available weekday in that range
+- If they say "morning" use 09:00, "afternoon" use 13:00, "end of day" use 16:00
+- If they give a time window like "between 9am and 5pm", use 09:00 as preferred_time and note the window in notes
+- Only mark preferred_date as missing if NO date or timeframe is mentioned at all
 
 Return ONLY the JSON object, no other text."""
 
