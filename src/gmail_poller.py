@@ -163,29 +163,36 @@ def poll_gmail():
 
 def send_clarification_email(service, to_email, original_subject, missing_fields):
     """Send auto-reply requesting missing booking info."""
-    fields_text = '\n'.join(f"- {f}" for f in missing_fields)
-    
+    if len(missing_fields) == 1:
+        fields_intro = "To complete your booking, we just need one more detail:"
+    else:
+        fields_intro = "To complete your booking, we just need a few more details:"
+
+    fields_text = '\n'.join(f"  - {f}" for f in missing_fields)
+
     body = f"""Hi,
 
-Thanks for getting in touch with us about a rim repair booking.
+Thank you for getting in touch with Rim Repair.
 
-To complete your booking, we just need a few more details:
+{fields_intro}
 
 {fields_text}
 
-Please reply with this information and we'll get you booked in right away.
+Once we have this information, we'll confirm your booking straight away.
 
-Thanks,
-The Rim Repair Team"""
+If you have any questions in the meantime, please don't hesitate to reply to this email.
+
+Kind regards,
+Rim Repair Team"""
 
     subject = f"Re: {original_subject}" if not original_subject.startswith('Re:') else original_subject
-    
+
     message = MIMEText(body)
     message['to'] = to_email
     message['subject'] = subject
-    
+
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-    
+
     service.users().messages().send(
         userId='me',
         body={'raw': raw}
