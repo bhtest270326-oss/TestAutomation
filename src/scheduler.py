@@ -39,6 +39,29 @@ def run_scheduled_tasks():
         logger.error(f"Scheduler error: {e}", exc_info=True)
 
 
+def _alert_owner_overrun(date_str, overrun_jobs):
+    """Send an SMS to the owner when the optimised schedule for a day exceeds 5pm."""
+    owner_phone = os.environ.get('OWNER_PHONE', '')
+    if not owner_phone:
+        return
+    names = ', '.join(
+        bd.get('customer_name') or bid
+        for bid, bd in overrun_jobs
+    )
+    last_bid, last_bd = overrun_jobs[-1]
+    last_time = last_bd.get('preferred_time', '?')
+    msg = (
+        f"SCHEDULE OVERRUN on {date_str}: {len(overrun_jobs)} job(s) "
+        f"({names}) — last job starts {last_time}, may finish after 5pm. "
+        f"Please review and reschedule. - Rim Repair System"
+    )
+    try:
+        send_sms(owner_phone, msg)
+        logger.warning(f"Owner alerted: schedule overrun on {date_str}")
+    except Exception as e:
+        logger.error(f"Could not send overrun alert: {e}")
+
+
 def optimize_daily_routes():
     """Every 5 minutes: reorder each day's confirmed bookings for optimal Maps route.
 
@@ -46,6 +69,8 @@ def optimize_daily_routes():
     updates SQLite and Google Calendar for any bookings whose times changed.
     Only reorders bookings within the same day — never moves them between days.
     Route always departs from and returns to the business address.
+    For single-job days, validates the job fits within business hours and alerts
+    the owner if the schedule overruns 5pm.
     """
     global _last_route_opt
     now_ts = _time.time()
@@ -54,7 +79,7 @@ def optimize_daily_routes():
     _last_route_opt = now_ts
 
     try:
-        from maps_handler import find_optimal_route, get_job_duration_minutes
+        from maps_handler import find_optimal_route, get_job_duration_minutes, BUSINESS_START_HOUR, BUSINESS_END_HOUR, get_travel_minutes, BUSINESS_ADDRESS, _ceil_15
         from calendar_handler import update_calendar_event_time
 
         state = StateManager()
@@ -73,40 +98,92 @@ def optimize_daily_routes():
             by_date.setdefault(date, []).append((bid, bd, booking))
 
         for date_str, day_jobs in sorted(by_date.items()):
-            if len(day_jobs) < 2:
+            target_date = datetime.strptime(date_str, '%Y-%m-%d')
+            day_start = target_date.replace(hour=BUSINESS_START_HOUR, minute=0, second=0, microsecond=0)
+            day_end = target_date.replace(hour=BUSINESS_END_HOUR, minute=0, second=0, microsecond=0)
+            booking_lookup = {bid: booking for bid, _, booking in day_jobs}
+
+            if len(day_jobs) == 1:
+                # Single-job day: ensure the job starts from business hours, not a customer-requested time
+                bid, bd, booking = day_jobs[0]
+                duration = get_job_duration_minutes(bd)
+                address = bd.get('address') or bd.get('suburb') or BUSINESS_ADDRESS
+                travel = get_travel_minutes(BUSINESS_ADDRESS, address)
+                correct_start = _ceil_15(day_start + timedelta(minutes=travel))
+                correct_end = correct_start + timedelta(minutes=duration)
+
+                current_time = bd.get('preferred_time', '')
+                new_time = correct_start.strftime('%H:%M')
+
+                if current_time != new_time:
+                    new_bd = dict(bd)
+                    new_bd['preferred_time'] = new_time
+                    state.update_confirmed_booking_data(bid, new_bd)
+                    event_id = booking.get('calendar_event_id')
+                    if event_id:
+                        try:
+                            update_calendar_event_time(event_id, correct_start, duration)
+                        except Exception as e:
+                            logger.error(f"Calendar update failed for {bid}: {e}")
+                    logger.info(f"Single-job {bid} on {date_str} rescheduled from {current_time} → {new_time}")
+
+                if correct_end > day_end:
+                    logger.warning(f"Single-job {bid} on {date_str} ends at {correct_end.strftime('%H:%M')} — exceeds 5pm")
+                    _alert_owner_overrun(date_str, [(bid, bd)])
                 continue
 
+            # Multi-job day: run TSP route optimiser
             jobs_input = [(bid, bd) for bid, bd, _ in day_jobs]
             optimal = find_optimal_route(jobs_input, date_str)
             if not optimal:
-                continue
+                # Maps API unavailable — fall back to sequential scheduling from 8am
+                logger.warning(f"Route optimiser unavailable for {date_str}, applying sequential fallback")
+                current_dt = day_start
+                prev_addr = BUSINESS_ADDRESS
+                optimal = []
+                for bid, bd, _ in day_jobs:
+                    addr = bd.get('address') or bd.get('suburb') or BUSINESS_ADDRESS
+                    travel = get_travel_minutes(prev_addr, addr)
+                    start_dt = _ceil_15(current_dt + timedelta(minutes=travel))
+                    new_bd = dict(bd)
+                    new_bd['preferred_time'] = start_dt.strftime('%H:%M')
+                    optimal.append((bid, new_bd))
+                    current_dt = start_dt + timedelta(minutes=get_job_duration_minutes(bd))
+                    prev_addr = addr
 
-            # Build lookups
+            # Apply updated times and detect overruns
             current_times = {bid: bd.get('preferred_time', '') for bid, bd, _ in day_jobs}
-            booking_lookup = {bid: booking for bid, _, booking in day_jobs}
+            overrun_jobs = []
 
-            any_change = False
             for bid, new_bd in optimal:
-                if new_bd.get('preferred_time', '') == current_times.get(bid, ''):
-                    continue
+                new_time = new_bd.get('preferred_time', '09:00')
+                duration = get_job_duration_minutes(new_bd)
+                try:
+                    job_start = datetime.strptime(f"{date_str} {new_time}", "%Y-%m-%d %H:%M")
+                    job_end = job_start + timedelta(minutes=duration)
+                    if job_end > day_end:
+                        overrun_jobs.append((bid, new_bd))
+                except Exception:
+                    pass
 
-                any_change = True
-                state.update_confirmed_booking_data(bid, new_bd)
+                if new_time != current_times.get(bid, ''):
+                    state.update_confirmed_booking_data(bid, new_bd)
+                    event_id = booking_lookup[bid].get('calendar_event_id')
+                    if event_id:
+                        try:
+                            new_dt = datetime.strptime(f"{date_str} {new_time}", "%Y-%m-%d %H:%M")
+                            update_calendar_event_time(event_id, new_dt, duration)
+                        except Exception as e:
+                            logger.error(f"Calendar update failed for {bid}: {e}")
+                    else:
+                        logger.warning(f"Booking {bid} has no calendar_event_id — calendar not updated")
 
-                event_id = booking_lookup[bid].get('calendar_event_id')
-                if event_id:
-                    new_time = new_bd.get('preferred_time', '09:00')
-                    try:
-                        new_dt = datetime.strptime(
-                            f"{date_str} {new_time}", "%Y-%m-%d %H:%M"
-                        )
-                        update_calendar_event_time(
-                            event_id, new_dt, get_job_duration_minutes(new_bd)
-                        )
-                    except Exception as e:
-                        logger.error(f"Calendar update failed for {bid}: {e}")
+            if overrun_jobs:
+                logger.warning(f"Schedule overrun on {date_str}: {[bid for bid, _ in overrun_jobs]} exceed 5pm")
+                _alert_owner_overrun(date_str, overrun_jobs)
 
-            if any_change:
+            changed = [bid for bid, new_bd in optimal if new_bd.get('preferred_time', '') != current_times.get(bid, '')]
+            if changed:
                 logger.info(
                     f"Route optimised for {date_str}: "
                     + ", ".join(
