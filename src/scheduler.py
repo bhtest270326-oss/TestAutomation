@@ -308,17 +308,17 @@ def _send_morning_email(to_email, booking_data):
 
 We hope you're having a great start to your day!
 
-Just a friendly heads-up — your rim repair technician will be visiting you today at {address} between {window}.
+Just a friendly heads-up — your Rim Repair technician will be visiting you today at {address} between {window}.
 
 To make sure we can get started straight away, could you please ensure:
 
   - There is sufficient clear working space around {vehicle}
   - The vehicle is accessible and ideally parked in a flat, open area
-  - You or someone authorised is available to approve the work and process payment by EFTPOS on the day
+  - You, or someone authorised on your behalf, is available to approve the work and process payment by EFTPOS on the day
 
 If anything has changed or you need to reach us before the visit, simply reply to this email.
 
-We're looking forward to seeing you today!
+We look forward to seeing you today!
 
 Kind regards,
 Rim Repair Team"""
@@ -365,10 +365,10 @@ def send_day_prior_reminders():
         address = booking_data.get('address') or booking_data.get('suburb', 'your location')
 
         msg = (
-            f"Hi {name}, just a reminder that your rim repair is booked for tomorrow "
+            f"Hi {name}, just a reminder that your Rim Repair booking is scheduled for tomorrow "
             f"at {time_str} at {address}. "
-            f"Payment by EFTPOS on the day. "
-            f"Any changes, please reply to this message. - Rim Repair Team"
+            f"Payment is by EFTPOS on the day. "
+            f"For any changes, please reply to this message. - Rim Repair Team"
         )
 
         send_sms(customer_phone, msg)
@@ -415,14 +415,14 @@ def send_post_job_review_requests():
 
         if GOOGLE_REVIEW_LINK:
             msg = (
-                f"Hi {name}, thanks for choosing Rim Repair Team today! "
+                f"Hi {name}, thanks for choosing Rim Repair today! "
                 f"We hope you're happy with the result. "
                 f"If you have a moment, a Google review would mean a lot to us: {GOOGLE_REVIEW_LINK} "
                 f"- Rim Repair Team"
             )
         else:
             msg = (
-                f"Hi {name}, thanks for choosing Rim Repair Team today! "
+                f"Hi {name}, thanks for choosing Rim Repair today! "
                 f"We hope you're happy with the result. "
                 f"Feel free to refer us to anyone who needs rim repairs. - Rim Repair Team"
             )

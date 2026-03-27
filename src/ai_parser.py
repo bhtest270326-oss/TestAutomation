@@ -176,6 +176,85 @@ def is_booking_request(body, subject=""):
         return True  # fail open: if classifier errors, treat as booking
 
 
+def is_availability_inquiry(subject: str, body: str) -> bool:
+    """Return True if the email is primarily asking about availability/scheduling
+    rather than requesting a specific date booking.
+
+    Uses the lightweight Haiku model for speed and cost efficiency.
+    """
+    try:
+        text = f"Subject: {subject}\n\n{body[:1500]}"
+        # Sanitise for injection
+        text, _ = _check_for_injection(text, source='availability-check')
+
+        response = client.messages.create(
+            model='claude-haiku-4-5-20251001',
+            max_tokens=10,
+            messages=[{
+                'role': 'user',
+                'content': (
+                    "Does this email primarily ask about AVAILABILITY or SCHEDULING "
+                    "(e.g. 'when are you free?', 'what slots do you have?', "
+                    "'are you available next week?', 'when can you come?') "
+                    "rather than requesting a specific date?\n\n"
+                    "Answer only YES or NO.\n\n"
+                    f"{text}"
+                ),
+            }],
+        )
+        answer = response.content[0].text.strip().upper()
+        return answer.startswith('YES')
+    except Exception as e:
+        logger.error(f"Availability inquiry classification error: {e}")
+        return False
+
+
+def format_availability_response(
+    customer_name: str,
+    availability: list,
+    service_description: str = '',
+) -> str:
+    """Build a plain-text email body showing a week's availability table.
+
+    Args:
+        customer_name:       First name or 'there'.
+        availability:        List of dicts from maps_handler.get_week_availability():
+                             [{'date': 'YYYY-MM-DD', 'day_name': 'Monday', 'available': True}, ...]
+        service_description: Human-readable description of the service, e.g. '2-rim repair'.
+
+    Returns:
+        Plain-text email body string.
+    """
+    # Build table
+    col_w = 12
+    header  = f"{'Day':<{col_w}}| Available"
+    divider = f"{'-' * col_w}|----------"
+    rows    = [header, divider]
+    for slot in availability:
+        yn = 'Yes' if slot['available'] else 'No'
+        rows.append(f"{slot['day_name']:<{col_w}}| {yn}")
+    table = '\n'.join(rows)
+
+    service_line = f" for a {service_description}" if service_description else ''
+
+    body = f"""Hi {customer_name},
+
+Thank you for reaching out to Rim Repair!
+
+Here is our availability for the coming week{service_line}:
+
+{table}
+
+Please reply with your preferred day and we will confirm a time that suits you. Payment is by EFTPOS on the day of the appointment.
+
+We look forward to hearing from you!
+
+Kind regards,
+Rim Repair Team"""
+
+    return body
+
+
 EXTRACTION_PROMPT = """You are a booking assistant for a mobile rim repair business in Perth, Western Australia.
 
 Extract booking details from the customer message below. Today's date is {today}.

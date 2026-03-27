@@ -339,8 +339,8 @@ def handle_owner_decline(pending_id, pending):
     if customer_phone and get_flag('flag_auto_sms_customer'):
         send_sms(customer_phone,
             f"Hi {booking_data.get('customer_name', 'there')}, thank you for getting in touch with Rim Repair. "
-            f"Unfortunately we're unable to accommodate your requested time. "
-            f"Please reply and we'll find a suitable time for you.")
+            f"Unfortunately, we're unable to accommodate your requested time. "
+            f"Please reply and we'll do our best to find a suitable time for you.")
     if customer_email and get_flag('flag_auto_email_customer'):
         send_decline_email(customer_email, booking_data)
     gmail_msg_id = pending.get('gmail_msg_id')
@@ -410,9 +410,9 @@ def build_customer_confirmation_sms(booking_data):
     date = _fmt_date(booking_data.get('preferred_date', 'TBC'))
     address = booking_data.get('address') or booking_data.get('suburb', 'your location')
     return (
-        f"Hi {booking_data.get('customer_name', 'there')}, your rim repair booking is confirmed for "
-        f"{date} at {address}. Our technician will come to you — you'll receive a reminder on the morning with your time window. "
-        f"Payment by EFTPOS on the day. Any questions, just reply. - Rim Repair"
+        f"Hi {booking_data.get('customer_name', 'there')}, your Rim Repair booking is confirmed for "
+        f"{date} at {address}. Our technician will come to you — you'll receive a reminder on the morning of your appointment with your time window. "
+        f"Payment is by EFTPOS on the day. Any questions, just reply. - Rim Repair"
     )
 
 def send_confirmation_email(to_email, booking_data):
@@ -467,7 +467,7 @@ def send_decline_email(to_email, booking_data):
 
 Thank you for reaching out to Rim Repair.
 
-Unfortunately we're unable to accommodate your requested time. We'd love to find a time that works for you — please reply to this email with your availability and we'll do our best to get you booked in as soon as possible.
+Unfortunately, we're unable to accommodate your requested time. We'd love to find a time that works for you — please reply to this email with your availability and we'll do our best to get you booked in as soon as possible.
 
 We apologise for any inconvenience and look forward to hearing from you.
 

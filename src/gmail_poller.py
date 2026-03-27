@@ -189,6 +189,14 @@ def _process_single_message(service, state, msg_id):
             logger.info(f"Email from {customer_email} is not a booking request — leaving untouched")
             state.mark_email_processed(msg_id)
             return
+        try:
+            from ai_parser import is_availability_inquiry
+            if is_availability_inquiry(subject, body):
+                logger.info(f"Availability inquiry detected from {customer_email} — sending availability table")
+                handle_availability_inquiry(msg_id, thread_id, subject, body, customer_email)
+                return
+        except Exception as e:
+            logger.error(f"Availability inquiry check failed for {customer_email}: {e}")
         handle_new_enquiry(
             service, state, msg_id, thread_id,
             body, subject, customer_email, message_id_header
@@ -443,6 +451,98 @@ def _assign_best_slot(booking_data, state):
         logger.warning(f"Slot computation skipped, keeping AI-extracted time: {e}")
 
 
+def handle_availability_inquiry(msg_id, thread_id, subject, body, customer_email):
+    """Respond to a customer asking about availability.
+
+    Attempts to extract service details (rim count, service type) to calculate
+    the required duration. Falls back to the default 2-rim duration if unclear.
+    Checks the next 5 business days and replies with a formatted availability table.
+    """
+    from ai_parser import extract_booking_details, format_availability_response, is_booking_request
+    from maps_handler import get_week_availability, get_job_duration_minutes
+    from state_manager import StateManager
+    from feature_flags import get_flag
+
+    state = StateManager()
+
+    if not get_flag('flag_auto_email_replies'):
+        logger.info(f"Auto email replies disabled — skipping availability response for {customer_email}")
+        state.mark_email_processed(msg_id)
+        return
+
+    # Try to extract service details to get the right duration
+    # Use a lightweight extraction — we only care about service_type and num_rims
+    try:
+        booking_data = extract_booking_details(subject, body)
+        duration = get_job_duration_minutes(booking_data)
+
+        # Build service description for the email
+        num_rims = booking_data.get('num_rims')
+        service_type = (booking_data.get('service_type') or '').lower()
+        if service_type == 'paint_touchup':
+            service_description = 'paint touch-up'
+        elif num_rims:
+            try:
+                n = int(num_rims)
+                service_description = f"{n}-rim repair"
+            except (ValueError, TypeError):
+                service_description = 'rim repair'
+        else:
+            service_description = 'rim repair'
+            duration = 120  # default: 1 rim / 2 hours
+
+        customer_name = booking_data.get('customer_name') or 'there'
+        # Use first name only
+        first_name = customer_name.split()[0].title() if customer_name != 'there' else 'there'
+
+    except Exception as e:
+        logger.warning(f"Could not extract booking details for availability inquiry: {e}")
+        first_name = 'there'
+        service_description = 'rim repair'
+        duration = 120
+
+    # Get week availability
+    try:
+        availability = get_week_availability(duration)
+    except Exception as e:
+        logger.error(f"get_week_availability failed: {e}")
+        state.mark_email_processed(msg_id)
+        return
+
+    # Format and send the response
+    try:
+        email_body = format_availability_response(first_name, availability, service_description)
+
+        service = get_gmail_service()
+
+        # Reply in same thread
+        reply_subject = subject if subject.lower().startswith('re:') else f"Re: {subject}"
+
+        msg = MIMEText(email_body)
+        msg['to'] = customer_email
+        msg['subject'] = reply_subject
+
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        send_body = {'raw': raw}
+        if thread_id:
+            send_body['threadId'] = thread_id
+
+        service.users().messages().send(userId='me', body=send_body).execute()
+
+        logger.info(f"Availability response sent to {customer_email} ({service_description}, {duration} min)")
+
+        # Apply 'Processed' Gmail label
+        try:
+            label_processed(service, msg_id)
+        except Exception as e:
+            logger.warning(f"Could not label availability reply: {e}")
+
+    except Exception as e:
+        logger.error(f"Could not send availability response to {customer_email}: {e}")
+
+    state.mark_email_processed(msg_id)
+
+
 def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, customer_email, message_id_header=None):
     """Process a brand new booking enquiry."""
     booking_data, missing_fields, needs_clarification = extract_booking_details(
@@ -478,7 +578,7 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
 
 Thank you for getting in touch with Rim Repair.
 
-Unfortunately, your location appears to be outside our current service area (Perth metropolitan area). We are unable to accommodate bookings in this area at this time.
+Unfortunately, your location appears to be outside our current service area (Perth metropolitan area). We're unable to accommodate your booking at this time.
 
 We appreciate your interest and apologise for the inconvenience.
 

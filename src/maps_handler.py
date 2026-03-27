@@ -300,6 +300,11 @@ def find_optimal_route(bookings_for_day, date_str):
     return result
 
 
+def _perth_now_local():
+    """Return current datetime in Perth time (UTC+8) without pytz dependency."""
+    return datetime.utcnow() + timedelta(hours=8)
+
+
 def find_next_available_slot(target_date_str, new_address, day_bookings,
                              new_booking_data=None):
     """Find the earliest available start time on target_date for a new job.
@@ -392,3 +397,90 @@ def find_next_available_slot(target_date_str, new_address, day_bookings,
         next_day += timedelta(days=1)
     logger.info(f"No slot available on {target_date_str}, advancing to {next_day.strftime('%Y-%m-%d')}")
     return next_day.strftime("%Y-%m-%d"), day_start.strftime("%H:%M")
+
+
+def get_week_availability(duration_minutes: int, from_date_str: str = None) -> list:
+    """Check availability for the next 5 business days.
+
+    For each day, determines whether a contiguous block of `duration_minutes`
+    can be fitted within business hours (8am–5pm) given existing confirmed bookings.
+    Travel time is NOT factored in here (address unknown at enquiry stage) — this
+    gives the customer an honest yes/no view without over-promising a specific time.
+
+    Args:
+        duration_minutes: required job duration in minutes.
+        from_date_str:    'YYYY-MM-DD' to start from (defaults to today Perth time).
+
+    Returns:
+        List of dicts, one per business day:
+            {'date': 'YYYY-MM-DD', 'day_name': 'Monday', 'available': True/False}
+    """
+    from state_manager import StateManager
+
+    if from_date_str:
+        try:
+            start = datetime.strptime(from_date_str, '%Y-%m-%d')
+        except ValueError:
+            start = _perth_now_local().replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        start = _perth_now_local().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Collect next 5 business days (Mon–Fri) starting from start date
+    business_days = []
+    cursor = start
+    while len(business_days) < 5:
+        if cursor.weekday() < 5:  # 0=Mon … 4=Fri
+            business_days.append(cursor)
+        cursor += timedelta(days=1)
+
+    state = StateManager()
+    result = []
+
+    day_start_hour = BUSINESS_START_HOUR   # 8
+    day_end_hour   = BUSINESS_END_HOUR     # 17
+
+    for day in business_days:
+        date_str  = day.strftime('%Y-%m-%d')
+        day_name  = day.strftime('%A')
+        day_start = day.replace(hour=day_start_hour, minute=0, second=0, microsecond=0)
+        day_end   = day.replace(hour=day_end_hour,   minute=0, second=0, microsecond=0)
+
+        existing_bookings = state.get_confirmed_bookings_for_date(date_str)
+
+        if not existing_bookings:
+            # Empty day — fits as long as duration <= total business hours
+            available = duration_minutes <= (day_end_hour - day_start_hour) * 60
+        else:
+            # Build sorted (start, end) intervals for confirmed jobs
+            intervals = []
+            for bd in existing_bookings:
+                t = bd.get('preferred_time') or '09:00'
+                try:
+                    job_start = datetime.strptime(f"{date_str} {t}", "%Y-%m-%d %H:%M")
+                except ValueError:
+                    continue
+                job_end = job_start + timedelta(minutes=get_job_duration_minutes(bd))
+                intervals.append((job_start, job_end))
+            intervals.sort(key=lambda x: x[0])
+
+            # Walk gaps: before first job, between jobs, after last job
+            available = False
+            gaps = []
+            prev_end = day_start
+            for job_start, job_end in intervals:
+                if job_start > prev_end:
+                    gaps.append((prev_end, job_start))
+                prev_end = max(prev_end, job_end)
+            # Gap after last job
+            if day_end > prev_end:
+                gaps.append((prev_end, day_end))
+
+            for gap_start, gap_end in gaps:
+                gap_minutes = (gap_end - gap_start).total_seconds() / 60
+                if gap_minutes >= duration_minutes:
+                    available = True
+                    break
+
+        result.append({'date': date_str, 'day_name': day_name, 'available': available})
+
+    return result
