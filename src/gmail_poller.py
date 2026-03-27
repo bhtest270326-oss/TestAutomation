@@ -518,7 +518,7 @@ def handle_availability_inquiry(msg_id, thread_id, subject, body, customer_email
         # Reply in same thread
         reply_subject = subject if subject.lower().startswith('re:') else f"Re: {subject}"
 
-        msg = MIMEText(email_body)
+        msg = MIMEText(email_body, 'html')
         msg['to'] = customer_email
         msg['subject'] = reply_subject
 

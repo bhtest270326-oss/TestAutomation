@@ -214,7 +214,7 @@ def format_availability_response(
     availability: list,
     service_description: str = '',
 ) -> str:
-    """Build a plain-text email body showing a week's availability table.
+    """Build an HTML email body showing a week's availability table.
 
     Args:
         customer_name:       First name or 'there'.
@@ -223,34 +223,48 @@ def format_availability_response(
         service_description: Human-readable description of the service, e.g. '2-rim repair'.
 
     Returns:
-        Plain-text email body string.
+        HTML email body string.
     """
-    # Build table
-    col_w = 12
-    header  = f"{'Day':<{col_w}}| Available"
-    divider = f"{'-' * col_w}|----------"
-    rows    = [header, divider]
-    for slot in availability:
-        yn = 'Yes' if slot['available'] else 'No'
-        rows.append(f"{slot['day_name']:<{col_w}}| {yn}")
-    table = '\n'.join(rows)
-
     service_line = f" for a {service_description}" if service_description else ''
 
-    body = f"""Hi {customer_name},
+    table_rows = ''
+    for slot in availability:
+        if slot['available']:
+            badge = '<span style="color:#16a34a;font-weight:600;">Yes</span>'
+        else:
+            badge = '<span style="color:#dc2626;font-weight:600;">No</span>'
+        table_rows += (
+            f'<tr>'
+            f'<td style="padding:10px 16px;border-bottom:1px solid #e2e8f0;">{slot["day_name"]}</td>'
+            f'<td style="padding:10px 16px;border-bottom:1px solid #e2e8f0;">{badge}</td>'
+            f'</tr>'
+        )
 
-Thank you for reaching out to Rim Repair!
-
-Here is our availability for the coming week{service_line}:
-
-{table}
-
-Please reply with your preferred day and we will confirm a time that suits you. Payment is by EFTPOS on the day of the appointment.
-
-We look forward to hearing from you!
-
-Kind regards,
-Rim Repair Team"""
+    body = (
+        '<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'
+        '\'Segoe UI\',Roboto,sans-serif;color:#1e293b;font-size:15px;line-height:1.6;'
+        'max-width:520px;margin:0 auto;padding:24px 16px;">'
+        f'<p>Hi {customer_name},</p>'
+        '<p>Thank you for reaching out to Rim Repair!</p>'
+        f'<p>Here is our availability for the coming week{service_line}:</p>'
+        '<table style="border-collapse:collapse;width:100%;max-width:340px;'
+        'border:1px solid #e2e8f0;margin:16px 0;">'
+        '<thead><tr style="background:#f1f5f9;">'
+        '<th style="padding:10px 16px;text-align:left;font-size:13px;font-weight:700;'
+        'text-transform:uppercase;letter-spacing:0.05em;color:#475569;'
+        'border-bottom:2px solid #e2e8f0;">Day</th>'
+        '<th style="padding:10px 16px;text-align:left;font-size:13px;font-weight:700;'
+        'text-transform:uppercase;letter-spacing:0.05em;color:#475569;'
+        'border-bottom:2px solid #e2e8f0;">Available</th>'
+        '</tr></thead>'
+        f'<tbody>{table_rows}</tbody>'
+        '</table>'
+        '<p>Please reply with your preferred day and we will confirm a time that suits you. '
+        'Payment is by EFTPOS on the day of the appointment.</p>'
+        '<p>We look forward to hearing from you!</p>'
+        '<p>Kind regards,<br><strong>Rim Repair Team</strong></p>'
+        '</body></html>'
+    )
 
     return body
 
