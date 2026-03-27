@@ -572,6 +572,8 @@ def send_owner_daily_briefing():
 
 def check_dlq_for_escalation():
     """Email owner when booking extractions have failed 3+ times (DLQ entries)."""
+    if not get_flag('flag_dlq_escalation'):
+        return
     try:
         from state_manager import StateManager
         state = StateManager()

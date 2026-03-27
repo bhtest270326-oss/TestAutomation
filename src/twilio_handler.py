@@ -415,6 +415,7 @@ def handle_owner_day_cancellation(date_str: str, reason: str) -> None:
         send_sms(os.environ['OWNER_MOBILE'], f"No confirmed bookings found for {date_str}.")
         return
 
+    auto_notify = get_flag('flag_day_cancellation_auto_notify')
     notified = 0
     for b in cancelled:
         try:
@@ -433,6 +434,9 @@ def handle_owner_day_cancellation(date_str: str, reason: str) -> None:
                 delete_calendar_event(event_id)
             except Exception as e:
                 logger.warning(f"Could not delete calendar event {event_id}: {e}")
+
+        if not auto_notify:
+            continue
 
         # SMS customer
         if customer_phone and get_flag('flag_auto_sms_customer'):

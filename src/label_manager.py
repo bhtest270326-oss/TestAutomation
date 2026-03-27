@@ -55,8 +55,20 @@ def get_or_create_label(service, label_name):
         if label_name in LABELS and 'color' in LABELS[label_name]:
             body['color'] = LABELS[label_name]['color']
 
-        created = service.users().labels().create(userId='me', body=body).execute()
-        label_id = created['id']
+        try:
+            created = service.users().labels().create(userId='me', body=body).execute()
+            label_id = created['id']
+        except HttpError as e:
+            if e.resp.status == 409:
+                # Another request created the label concurrently — re-fetch to get the ID
+                result2 = service.users().labels().list(userId='me').execute()
+                existing2 = {l['name']: l['id'] for l in result2.get('labels', [])}
+                label_id = existing2.get(label_name)
+                if not label_id:
+                    logger.error(f"Label '{label_name}' 409 but still not found after re-fetch")
+                    return None
+            else:
+                raise
         _label_cache[label_name] = label_id
         logger.info(f"Created label: {label_name}")
         return label_id

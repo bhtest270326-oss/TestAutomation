@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-SHEETS_SHARE_EMAIL = os.environ.get('SHEETS_SHARE_EMAIL', 'bhtest270326@gmail.com')
+SHEETS_SHARE_EMAIL = os.environ.get('SHEETS_SHARE_EMAIL', os.environ.get('OWNER_EMAIL', ''))
 SPREADSHEET_TITLE = 'Rim Repair Bookings'
 SPREADSHEET_ID_KEY = 'google_sheets_spreadsheet_id'
 
@@ -93,22 +93,22 @@ def append_booking_row(booking_id: str, booking: dict):
         booking:    Full booking dict from StateManager (includes booking_data, customer_email, etc.)
     """
     try:
-        from google_auth import get_sheets_service, SCOPES
+        from google_auth import get_sheets_service, SHEETS_SCOPES
         from google.oauth2.credentials import Credentials
         from googleapiclient.discovery import build
         from state_manager import StateManager
 
         sheets_svc = get_sheets_service()
 
-        # Build Drive service using the same credential pattern as google_auth.py
+        # Build Drive service using Sheets scopes (not Gmail/Calendar scopes)
         try:
             creds = Credentials(
                 token=None,
-                refresh_token=os.environ['GOOGLE_REFRESH_TOKEN'],
+                refresh_token=os.environ['GOOGLE_SHEETS_REFRESH_TOKEN'],
                 client_id=os.environ['GOOGLE_CLIENT_ID'],
                 client_secret=os.environ['GOOGLE_CLIENT_SECRET'],
                 token_uri='https://oauth2.googleapis.com/token',
-                scopes=SCOPES
+                scopes=SHEETS_SCOPES
             )
             drive_svc = build('drive', 'v3', credentials=creds)
         except Exception as e:
