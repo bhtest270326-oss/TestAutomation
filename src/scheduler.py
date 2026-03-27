@@ -46,10 +46,24 @@ def run_scheduled_tasks():
 
 
 def _alert_owner_overrun(date_str, overrun_jobs):
-    """Send an SMS to the owner when the optimised schedule for a day exceeds 5pm."""
+    """Send an SMS to the owner when the optimised schedule for a day exceeds 5pm.
+
+    Deduplicates: only sends once per calendar date. Subsequent 5-minute optimiser
+    runs for the same overrun are silently skipped until the next day.
+    """
     owner_phone = os.environ.get('OWNER_PHONE', '')
     if not owner_phone:
         return
+
+    # Cooldown: skip if we already alerted for this date today
+    try:
+        state = StateManager()
+        cooldown_key = f'overrun_alert_sent_{date_str}'
+        if state.get_app_state(cooldown_key):
+            return  # already alerted for this date
+    except Exception:
+        pass  # if state check fails, proceed to send
+
     names = ', '.join(
         bd.get('customer_name') or bid
         for bid, bd in overrun_jobs
@@ -64,6 +78,10 @@ def _alert_owner_overrun(date_str, overrun_jobs):
     try:
         send_sms(owner_phone, msg)
         logger.warning(f"Owner alerted: schedule overrun on {date_str}")
+        try:
+            state.set_app_state(cooldown_key, _perth_now().isoformat())
+        except Exception:
+            pass
     except Exception as e:
         logger.error(f"Could not send overrun alert: {e}")
 
@@ -291,17 +309,18 @@ def _time_window(time_str):
 def _send_morning_email(to_email, booking_data):
     """Send the day-of morning notification email to a customer."""
     try:
+        import html as _html
         from google_auth import get_gmail_service
-        from email_utils import send_customer_email, _p, _h2, _info_table, _ul, DARK, esc
+        from email_utils import send_customer_email, _p, _h2, _info_table, _ul, DARK
 
         service = get_gmail_service()
 
         name = booking_data.get('customer_name', 'there')
-        first = esc(name.split()[0]) if name and name != 'there' else 'there'
+        first = _html.escape(name.split()[0]) if name and name != 'there' else 'there'
         time_str = booking_data.get('preferred_time') or '09:00'
         window = _time_window(time_str)
-        address = esc(booking_data.get('address') or booking_data.get('suburb', 'your location'))
-        vehicle = esc(' '.join(filter(None, [
+        address = _html.escape(booking_data.get('address') or booking_data.get('suburb', 'your location'))
+        vehicle = _html.escape(' '.join(filter(None, [
             booking_data.get('vehicle_year'),
             booking_data.get('vehicle_colour'),
             booking_data.get('vehicle_make'),
