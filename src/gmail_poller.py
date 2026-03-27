@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 from google_auth import get_gmail_service
 from googleapiclient.errors import HttpError
-from ai_parser import extract_booking_details, merge_booking_data
+from ai_parser import extract_booking_details, merge_booking_data, is_booking_request
 from state_manager import StateManager
 from twilio_handler import send_owner_confirmation_request
 from label_manager import initialise_labels, label_pending_reply, label_awaiting_confirmation, label_processed
@@ -114,6 +114,7 @@ def _process_single_message(service, state, msg_id):
     existing_pending = state.get_pending_booking_by_thread(thread_id) if thread_id else None
 
     if existing_pending:
+        # Reply to an ongoing clarification — always process, no need to re-classify
         handle_clarification_reply(
             service, state, msg_id, thread_id,
             existing_pending, body, subject, customer_email,
@@ -122,6 +123,11 @@ def _process_single_message(service, state, msg_id):
     elif thread_id and state.thread_has_active_booking(thread_id):
         logger.info(f"Thread {thread_id} already has an active booking, skipping")
     else:
+        # New thread — classify before running any booking workflow
+        if not is_booking_request(body, subject):
+            logger.info(f"Email from {customer_email} is not a booking request — leaving untouched")
+            state.mark_email_processed(msg_id)
+            return
         handle_new_enquiry(
             service, state, msg_id, thread_id,
             body, subject, customer_email, message_id_header

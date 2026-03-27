@@ -8,6 +8,39 @@ logger = logging.getLogger(__name__)
 
 client = anthropic.Anthropic(api_key=os.environ['ANTHROPIC_API_KEY'])
 
+_INTENT_PROMPT = """You are a classifier for a mobile rim repair business inbox in Perth, Western Australia.
+
+Determine whether the following email is a booking request or service enquiry for rim repair, wheel repair, or paint touch-up.
+
+Reply with exactly one word: YES if it is a booking/service enquiry, NO if it is not (e.g. newsletters, wrong number, spam, general questions unrelated to booking a service, supplier emails, review requests from other businesses, etc).
+
+Subject: {subject}
+---
+{body}
+---
+
+Reply YES or NO only."""
+
+
+def is_booking_request(body, subject=""):
+    """Return True if the email appears to be a rim repair booking or service enquiry."""
+    try:
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=5,
+            messages=[{"role": "user", "content": _INTENT_PROMPT.format(
+                subject=subject or "(no subject)",
+                body=body[:2000]  # cap to keep token cost minimal
+            )}]
+        )
+        answer = response.content[0].text.strip().upper()
+        logger.info(f"Booking intent classification: {answer!r} (subject: {subject!r})")
+        return answer.startswith("YES")
+    except Exception as e:
+        logger.error(f"Intent classification error: {e} — defaulting to process")
+        return True  # fail open: if classifier errors, treat as booking
+
+
 EXTRACTION_PROMPT = """You are a booking assistant for a mobile rim repair business in Perth, Western Australia.
 
 Extract booking details from the following customer message. Today's date is {today}.
