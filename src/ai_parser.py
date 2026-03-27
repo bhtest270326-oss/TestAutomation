@@ -348,8 +348,20 @@ def format_availability_response(
                 f'Please choose one of the available days below.</p>'
             )
 
-    # Required fields the customer must supply to complete their booking
-    fields = missing_fields or [
+    # Required fields the customer must supply to complete their booking.
+    # Strip any date/day/preferred-date items — the intro sentence already asks
+    # the customer to state their preferred day, so listing it again is redundant.
+    _date_related = re.compile(r'\b(date|day|preferred|available|availab)\b', re.I)
+    fields = [
+        f for f in (missing_fields or [
+            'Your full name',
+            'Your phone number',
+            'Your suburb or service address',
+            'Vehicle make, year and model (e.g. 2019 Toyota Camry)',
+            'Description of the damage or repair needed (e.g. kerb rash on front-left rim)',
+        ])
+        if not _date_related.search(f)
+    ] or [
         'Your full name',
         'Your phone number',
         'Your suburb or service address',
