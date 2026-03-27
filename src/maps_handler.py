@@ -399,17 +399,28 @@ def find_next_available_slot(target_date_str, new_address, day_bookings,
     return next_day.strftime("%Y-%m-%d"), day_start.strftime("%H:%M")
 
 
-def get_week_availability(duration_minutes: int, from_date_str: str = None) -> list:
+def get_week_availability(duration_minutes: int, from_date_str: str = None,
+                          assumed_travel_minutes: int = 25) -> list:
     """Check availability for the next 5 business days.
 
     For each day, determines whether a contiguous block of `duration_minutes`
     can be fitted within business hours (8am–5pm) given existing confirmed bookings.
-    Travel time is NOT factored in here (address unknown at enquiry stage) — this
-    gives the customer an honest yes/no view without over-promising a specific time.
+    An assumed travel time is added to each gap's required size to avoid offering
+    slots that would not survive real routing:
+
+    - Empty day:              duration + assumed_travel_minutes * 2
+                              (travel to job from base, then back to base)
+    - Gap before first job:   duration + assumed_travel_minutes
+                              (travel from base to new job)
+    - Gap between two jobs:   duration + assumed_travel_minutes * 2
+                              (travel from prev job to new job, then new job to next job)
+    - Gap after last job:     duration + assumed_travel_minutes
+                              (travel from last job to new job)
 
     Args:
-        duration_minutes: required job duration in minutes.
-        from_date_str:    'YYYY-MM-DD' to start from (defaults to today Perth time).
+        duration_minutes:       required job duration in minutes.
+        from_date_str:          'YYYY-MM-DD' to start from (defaults to today Perth time).
+        assumed_travel_minutes: assumed one-way travel time in minutes (default 25).
 
     Returns:
         List of dicts, one per business day:
@@ -448,8 +459,9 @@ def get_week_availability(duration_minutes: int, from_date_str: str = None) -> l
         existing_bookings = state.get_confirmed_bookings_for_date(date_str)
 
         if not existing_bookings:
-            # Empty day — fits as long as duration <= total business hours
-            available = duration_minutes <= (day_end_hour - day_start_hour) * 60
+            # Empty day — must account for travel to job and back to base
+            required = duration_minutes + assumed_travel_minutes * 2
+            available = required <= (day_end_hour - day_start_hour) * 60
         else:
             # Build sorted (start, end) intervals for confirmed jobs
             intervals = []
@@ -463,21 +475,38 @@ def get_week_availability(duration_minutes: int, from_date_str: str = None) -> l
                 intervals.append((job_start, job_end))
             intervals.sort(key=lambda x: x[0])
 
-            # Walk gaps: before first job, between jobs, after last job
+            # Walk gaps: tag each with its position so travel overhead is applied correctly.
+            # gap type: 'before_first' | 'between' | 'after_last'
             available = False
-            gaps = []
+            gaps = []  # list of (gap_start, gap_end, gap_type)
             prev_end = day_start
-            for job_start, job_end in intervals:
+
+            for i, (job_start, job_end) in enumerate(intervals):
                 if job_start > prev_end:
-                    gaps.append((prev_end, job_start))
+                    gap_type = 'before_first' if i == 0 else 'between'
+                    gaps.append((prev_end, job_start, gap_type))
                 prev_end = max(prev_end, job_end)
+
             # Gap after last job
             if day_end > prev_end:
-                gaps.append((prev_end, day_end))
+                gaps.append((prev_end, day_end, 'after_last'))
 
-            for gap_start, gap_end in gaps:
+            for gap_start, gap_end, gap_type in gaps:
                 gap_minutes = (gap_end - gap_start).total_seconds() / 60
-                if gap_minutes >= duration_minutes:
+
+                # Travel overhead depends on position in the day
+                if gap_type == 'before_first':
+                    # Travel from base to new job only (next job follows immediately after)
+                    travel_overhead = assumed_travel_minutes
+                elif gap_type == 'between':
+                    # Travel from previous job to new job, then from new job to next job
+                    travel_overhead = assumed_travel_minutes * 2
+                else:  # after_last
+                    # Travel from last job to new job (no following job to travel to)
+                    travel_overhead = assumed_travel_minutes
+
+                required = duration_minutes + travel_overhead
+                if gap_minutes >= required:
                     available = True
                     break
 

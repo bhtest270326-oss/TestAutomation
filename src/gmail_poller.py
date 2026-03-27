@@ -598,7 +598,7 @@ def handle_availability_inquiry(msg_id, thread_id, subject, body, customer_email
 
     # Get week availability
     try:
-        availability = get_week_availability(duration)
+        availability = get_week_availability(duration, assumed_travel_minutes=25)
     except Exception as e:
         logger.error(f"get_week_availability failed: {e}")
         state.mark_email_processed(msg_id)
@@ -608,10 +608,14 @@ def handle_availability_inquiry(msg_id, thread_id, subject, body, customer_email
     try:
         from email_utils import send_customer_email
 
+        # Extract the customer's requested day (if any) so the response can acknowledge it
+        requested_date = booking_data.get('preferred_date')
+
         # Pass only the fields still missing — already-provided details won't appear in the list
         inner_html = format_availability_response(
             first_name, availability, service_description,
-            missing_fields=missing_fields if missing_fields else None
+            missing_fields=missing_fields if missing_fields else None,
+            requested_date=requested_date,
         )
 
         service = get_gmail_service()

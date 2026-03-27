@@ -214,6 +214,7 @@ def format_availability_response(
     availability: list,
     service_description: str = '',
     missing_fields: list = None,
+    requested_date: str = None,
 ) -> str:
     """Build an HTML email body showing a week's availability table.
 
@@ -226,6 +227,9 @@ def format_availability_response(
                              [{'date': 'YYYY-MM-DD', 'day_name': 'Monday', 'available': True}, ...]
         service_description: Human-readable description of the service, e.g. '2-rim repair'.
         missing_fields:      Override the default required-fields list if provided.
+        requested_date:      YYYY-MM-DD date the customer asked about (or None).
+                             When provided, the relevant row is highlighted and a
+                             personalised sentence is prepended to the table.
 
     Returns:
         HTML email body string.
@@ -237,19 +241,58 @@ def format_availability_response(
 
     service_line = f" for a {service_description}" if service_description else ''
 
+    # Resolve the requested slot (if any) so we can highlight it and emit a lead sentence
+    requested_slot = None
+    if requested_date:
+        for slot in availability:
+            if slot.get('date') == requested_date:
+                requested_slot = slot
+                break
+
     table_rows = ''
     for slot in availability:
+        is_requested = requested_slot is not None and slot.get('date') == requested_date
         if slot['available']:
             badge = f'<span style="color:#16a34a;font-weight:700;">&#10003; Yes</span>'
         else:
             badge = f'<span style="color:{RED};font-weight:700;">&#10007; No</span>'
+
+        if is_requested:
+            # Highlight the row with a light amber background and append a note to the day name
+            row_bg = 'background:#fffbeb;'
+            day_cell = (
+                f'{slot["day_name"]}'
+                f'&nbsp;<span style="font-size:12px;color:#92400e;font-weight:600;">'
+                f'(your requested day)</span>'
+            )
+        else:
+            row_bg = ''
+            day_cell = slot["day_name"]
+
         table_rows += (
-            f'<tr>'
+            f'<tr style="{row_bg}">'
             f'<td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;'
-            f'font-size:14px;color:{DARK};">{slot["day_name"]}</td>'
+            f'font-size:14px;color:{DARK};">{day_cell}</td>'
             f'<td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;">{badge}</td>'
             f'</tr>'
         )
+
+    # Build an optional lead sentence that acknowledges the requested day
+    requested_day_sentence = ''
+    if requested_slot is not None:
+        day_name = requested_slot['day_name']
+        if requested_slot['available']:
+            requested_day_sentence = (
+                f'<p style="color:{DARK};font-size:15px;line-height:1.65;margin:0 0 12px;">'
+                f'Great news \u2014 <strong>{day_name}</strong> is available! '
+                f'You can see the full week below.</p>'
+            )
+        else:
+            requested_day_sentence = (
+                f'<p style="color:{DARK};font-size:15px;line-height:1.65;margin:0 0 12px;">'
+                f'Unfortunately, <strong>{day_name}</strong> is fully booked. '
+                f'Please choose one of the available days below.</p>'
+            )
 
     # Required fields the customer must supply to complete their booking
     fields = missing_fields or [
@@ -273,6 +316,7 @@ def format_availability_response(
         f'<h2 style="color:{RED};font-size:18px;font-weight:700;margin:0 0 16px;'
         f'padding-bottom:10px;border-bottom:2px solid {RED};">'
         f'Availability{service_line.replace("for a ", "— ").title() if service_line else ""}</h2>'
+        f'{requested_day_sentence}'
         f'<p style="color:{DARK};font-size:15px;margin:0 0 12px;">'
         f'Here is our availability for the coming week{service_line}:</p>'
         f'<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;'
