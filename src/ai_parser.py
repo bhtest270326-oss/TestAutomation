@@ -79,7 +79,7 @@ def extract_booking_details(message_body, subject="", customer_email=""):
             full_message = f"Subject: {subject}\n\n{message_body}"
 
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-3-5-sonnet-20241022",
             max_tokens=1000,
             messages=[{"role": "user", "content": EXTRACTION_PROMPT.format(today=today, message=full_message)}]
         )
@@ -117,7 +117,7 @@ def parse_owner_correction(original_booking, correction_text, slot_hint=None):
             if slot_hint else ""
         )
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-3-5-sonnet-20241022",
             max_tokens=1000,
             messages=[{"role": "user", "content": CORRECTION_PROMPT.format(
                 today=today,
