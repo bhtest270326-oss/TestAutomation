@@ -21,6 +21,9 @@ _PUBSUB_TOKEN = os.environ.get('PUBSUB_WEBHOOK_TOKEN', '')
 def create_app():
     app = Flask(__name__)
 
+    from admin_ui import admin_bp
+    app.register_blueprint(admin_bp)
+
     # ------------------------------------------------------------------
     # Gmail / Pub/Sub webhook
     # ------------------------------------------------------------------
@@ -112,5 +115,23 @@ def create_app():
     @app.route('/health', methods=['GET'])
     def health():
         return jsonify({'status': 'ok'})
+
+    @app.route('/health/ai', methods=['GET'])
+    def health_ai():
+        """Diagnostic endpoint — tests whether the Anthropic API is reachable."""
+        try:
+            from ai_parser import client
+            resp = client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=10,
+                messages=[{"role": "user", "content": "Reply with the single word OK"}]
+            )
+            return jsonify({'status': 'ok', 'response': resp.content[0].text.strip()})
+        except Exception as e:
+            return jsonify({
+                'status': 'error',
+                'error_type': type(e).__name__,
+                'error': str(e)
+            }), 500
 
     return app
