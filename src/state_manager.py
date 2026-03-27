@@ -114,6 +114,22 @@ def _ensure_schema(conn):
     """)
     conn.commit()
 
+    # Column migrations — handle tables created before new columns were added.
+    # ALTER TABLE ADD COLUMN is idempotent via the try/except below.
+    _migrations = [
+        "ALTER TABLE clarifications ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE bookings ADD COLUMN calendar_event_id TEXT",
+        "ALTER TABLE bookings ADD COLUMN reminders_sent TEXT NOT NULL DEFAULT '[]'",
+        "ALTER TABLE bookings ADD COLUMN confirmed_at TEXT",
+        "ALTER TABLE bookings ADD COLUMN declined_at TEXT",
+    ]
+    for sql in _migrations:
+        try:
+            conn.execute(sql)
+            conn.commit()
+        except Exception:
+            pass  # column already exists
+
 
 def _migrate_from_json(conn):
     """One-time migration from the legacy JSON state file, if it exists."""
