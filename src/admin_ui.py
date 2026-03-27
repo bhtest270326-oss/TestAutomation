@@ -183,3 +183,80 @@ def admin_toggle():
     logger.info(f"Admin: flag '{key}' → {'ON' if new_state else 'OFF'}")
 
     return redirect(f'/admin{_qs()}')
+
+
+# ---------------------------------------------------------------------------
+# JSON API — consumed by the local dashboard app
+# ---------------------------------------------------------------------------
+
+@admin_bp.route('/admin/api/data', methods=['GET'])
+def api_data():
+    if not _authorised():
+        return jsonify({'error': 'Unauthorized'}), 403
+
+    from state_manager import StateManager
+
+    state = StateManager()
+    flags = get_all_flags()
+
+    # Pending bookings
+    with state._conn() as conn:
+        pending_rows = conn.execute(
+            "SELECT * FROM bookings WHERE status='awaiting_owner' ORDER BY created_at DESC"
+        ).fetchall()
+
+    def _card(row, bd):
+        return {
+            'id':      row['id'],
+            'name':    bd.get('customer_name', '—'),
+            'date':    bd.get('preferred_date', '?'),
+            'time':    bd.get('preferred_time', '?'),
+            'address': bd.get('address') or bd.get('suburb', '?'),
+            'service': (bd.get('service_type') or 'rim_repair').replace('_', ' ').title(),
+            'rims':    bd.get('rim_count') or '?',
+            'phone':   bd.get('customer_phone', ''),
+            'email':   row['customer_email'] or '',
+        }
+
+    pending = [_card(r, json.loads(r['booking_data'] or '{}')) for r in pending_rows]
+
+    today     = datetime.now().strftime('%Y-%m-%d')
+    confirmed = state.get_confirmed_bookings()
+    upcoming  = []
+    for bid, b in confirmed.items():
+        bd   = b.get('booking_data', {})
+        date = bd.get('preferred_date', '')
+        if date >= today:
+            row = type('R', (), {'id': bid, 'customer_email': b.get('customer_email', '')})()
+            upcoming.append(_card(row, bd))
+    upcoming.sort(key=lambda x: (x['date'], x['time']))
+    today_jobs = [u for u in upcoming if u['date'] == today]
+
+    return jsonify({
+        'flags':      flags,
+        'pending':    pending,
+        'upcoming':   upcoming,
+        'today_jobs': today_jobs,
+        'stats': {
+            'pending':  len(pending),
+            'today':    len(today_jobs),
+            'upcoming': len(upcoming),
+        },
+    })
+
+
+@admin_bp.route('/admin/api/toggle', methods=['POST'])
+def api_toggle():
+    """JSON toggle endpoint used by the local dashboard."""
+    if not _authorised():
+        return jsonify({'error': 'Unauthorized'}), 403
+
+    body = request.get_json(silent=True) or {}
+    key  = body.get('key', '')
+    if key not in FLAGS:
+        return jsonify({'error': 'Unknown flag'}), 400
+
+    new_state = not get_flag(key)
+    set_flag(key, new_state)
+    logger.info(f"API toggle: '{key}' → {'ON' if new_state else 'OFF'}")
+    return jsonify({'success': True, 'enabled': new_state})
