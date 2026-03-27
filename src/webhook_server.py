@@ -26,6 +26,17 @@ def create_app():
     app.register_blueprint(admin_bp)
 
     # ------------------------------------------------------------------
+    # Static assets (banner image etc.)
+    # ------------------------------------------------------------------
+
+    @app.route('/static/<path:filename>')
+    def static_files(filename):
+        import os
+        from flask import send_from_directory
+        static_dir = os.path.join(os.path.dirname(__file__), 'static')
+        return send_from_directory(static_dir, filename)
+
+    # ------------------------------------------------------------------
     # Gmail / Pub/Sub webhook
     # ------------------------------------------------------------------
 

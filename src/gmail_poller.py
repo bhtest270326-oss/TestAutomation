@@ -475,8 +475,8 @@ def _send_date_full_email(service, to_email: str, subject: str, requested_date: 
     """Email the customer that their requested date is full, show fresh availability,
     and ask them to pick an available day (including all required details if still needed).
     """
-    from ai_parser import format_availability_response
     from maps_handler import get_week_availability, get_job_duration_minutes
+    from email_utils import send_customer_email, _h2, _ul
     try:
         from datetime import datetime as _dt
         try:
@@ -487,16 +487,6 @@ def _send_date_full_email(service, to_email: str, subject: str, requested_date: 
         duration = get_job_duration_minutes(booking_data)
         availability = get_week_availability(duration)
 
-        intro = (
-            f'<p>Hi {first_name},</p>'
-            f'<p>Thank you for your reply! Unfortunately <strong>{day_name}</strong> is '
-            f'fully booked and we\'re unable to take any further appointments that day.</p>'
-            f'<p>Here is our current availability — please choose one of the available days'
-            f'{" and include your details below" if missing_fields else ""}:</p>'
-        )
-
-        # Reuse format_availability_response but inject a custom intro by building the
-        # full HTML inline so the "Hi {name}" greeting isn't doubled.
         table_rows = ''
         for slot in availability:
             if slot['available']:
@@ -512,28 +502,28 @@ def _send_date_full_email(service, to_email: str, subject: str, requested_date: 
 
         fields_section = ''
         if missing_fields:
-            fields_html = ''.join(
-                f'<li style="margin-bottom:4px;">{f}</li>' for f in missing_fields
-            )
             fields_section = (
-                '<p><strong>To confirm your booking in one reply,</strong> please also include:</p>'
-                f'<ul style="margin:8px 0 16px 0;padding-left:20px;">{fields_html}</ul>'
+                f'<p style="margin:16px 0 4px;"><strong>To confirm your booking in one reply,</strong> '
+                f'please also include:</p>'
+                + _ul(missing_fields)
             )
 
-        html = (
-            '<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'
-            '\'Segoe UI\',Roboto,sans-serif;color:#1e293b;font-size:15px;line-height:1.6;'
-            'max-width:520px;margin:0 auto;padding:24px 16px;">'
-            + intro
+        content_html = (
+            f'<p>Hi {first_name},</p>'
+            f'<p>Thank you for your reply! Unfortunately <strong>{day_name}</strong> is '
+            f'fully booked and we\'re unable to take any further appointments that day.</p>'
+            f'<p>Here is our current availability — please choose one of the available days'
+            f'{" and include your details below" if missing_fields else ""}:</p>'
+            + _h2('Availability')
             + '<table style="border-collapse:collapse;width:100%;max-width:340px;'
-            'border:1px solid #e2e8f0;margin:16px 0;">'
-            '<thead><tr style="background:#f1f5f9;">'
+            'border:1px solid #e2e8f0;margin:8px 0 16px;">'
+            '<thead><tr style="background:#C41230;">'
             '<th style="padding:10px 16px;text-align:left;font-size:13px;font-weight:700;'
-            'text-transform:uppercase;letter-spacing:0.05em;color:#475569;'
-            'border-bottom:2px solid #e2e8f0;">Day</th>'
+            'text-transform:uppercase;letter-spacing:0.05em;color:#ffffff;'
+            'border-bottom:2px solid #C41230;">Day</th>'
             '<th style="padding:10px 16px;text-align:left;font-size:13px;font-weight:700;'
-            'text-transform:uppercase;letter-spacing:0.05em;color:#475569;'
-            'border-bottom:2px solid #e2e8f0;">Available</th>'
+            'text-transform:uppercase;letter-spacing:0.05em;color:#ffffff;'
+            'border-bottom:2px solid #C41230;">Available</th>'
             '</tr></thead>'
             f'<tbody>{table_rows}</tbody>'
             '</table>'
@@ -541,21 +531,10 @@ def _send_date_full_email(service, to_email: str, subject: str, requested_date: 
             + '<p>Payment is by EFTPOS on the day of the appointment. '
             'We look forward to hearing from you!</p>'
             '<p>Kind regards,<br><strong>Rim Repair Team</strong></p>'
-            '</body></html>'
         )
 
-        from email.mime.multipart import MIMEMultipart
-        from email.mime.text import MIMEText as _MIMEText
-        msg = MIMEMultipart('alternative')
-        msg['to'] = to_email
-        msg['subject'] = subject if subject.lower().startswith('re:') else f'Re: {subject}'
-        msg.attach(_MIMEText(html, 'html'))
-
-        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-        send_body = {'raw': raw}
-        if thread_id:
-            send_body['threadId'] = thread_id
-        service.users().messages().send(userId='me', body=send_body).execute()
+        reply_subject = subject if subject.lower().startswith('re:') else f'Re: {subject}'
+        send_customer_email(service, to_email, reply_subject, content_html, thread_id=thread_id)
         logger.info(f"Date-full rejection email sent to {to_email} (requested {requested_date})")
     except Exception as e:
         logger.error(f"Could not send date-full email to {to_email}: {e}")
@@ -621,23 +600,16 @@ def handle_availability_inquiry(msg_id, thread_id, subject, body, customer_email
 
     # Format and send the response
     try:
-        email_body = format_availability_response(first_name, availability, service_description)
+        from email_utils import send_customer_email, build_email_html
+
+        # format_availability_response returns inner HTML content; wrap it in the brand shell
+        inner_html = format_availability_response(first_name, availability, service_description)
+        email_body = build_email_html(inner_html)
 
         service = get_gmail_service()
-
-        # Reply in same thread
         reply_subject = subject if subject.lower().startswith('re:') else f"Re: {subject}"
 
-        msg = MIMEText(email_body, 'html')
-        msg['to'] = customer_email
-        msg['subject'] = reply_subject
-
-        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-        send_body = {'raw': raw}
-        if thread_id:
-            send_body['threadId'] = thread_id
-
-        service.users().messages().send(userId='me', body=send_body).execute()
+        send_customer_email(service, customer_email, reply_subject, inner_html, thread_id=thread_id)
 
         logger.info(f"Availability response sent to {customer_email} ({service_description}, {duration} min)")
 
@@ -683,28 +655,20 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
         if address_to_check and not is_within_service_area(address_to_check):
             logger.info(f"Booking rejected: address '{address_to_check}' outside service area")
             try:
+                from email_utils import send_customer_email, _p, DARK
                 name = booking_data.get('customer_name', 'there')
-                decline_body = f"""Hi {name},
-
-Thank you for getting in touch with Rim Repair.
-
-Unfortunately, your location appears to be outside our current service area (Perth metropolitan area). We're unable to accommodate your booking at this time.
-
-We appreciate your interest and apologise for the inconvenience.
-
-Kind regards,
-Rim Repair Team"""
-                decline_msg = MIMEText(decline_body)
-                decline_msg['to'] = customer_email
-                decline_msg['subject'] = 'Re: Your Rim Repair Enquiry'
-                if message_id_header:
-                    decline_msg['In-Reply-To'] = message_id_header
-                    decline_msg['References'] = message_id_header
-                raw = base64.urlsafe_b64encode(decline_msg.as_bytes()).decode()
-                send_body = {'raw': raw}
-                if thread_id:
-                    send_body['threadId'] = thread_id
-                service.users().messages().send(userId='me', body=send_body).execute()
+                first = name.split()[0] if name and name != 'there' else 'there'
+                content = (
+                    _p(f'Hi {first},')
+                    + _p('Thank you for getting in touch with Perth Swedish &amp; European Auto Centre.')
+                    + _p('Unfortunately, your location appears to be outside our current service area '
+                         '(Perth metropolitan area). We\'re unable to accommodate your booking at this time.')
+                    + _p('We appreciate your interest and apologise for the inconvenience.')
+                    + f'<p style="margin:24px 0 0;color:{DARK};font-size:15px;">'
+                      f'Kind regards,<br><strong style="color:#C41230;">Rim Repair Team</strong></p>'
+                )
+                send_customer_email(service, customer_email, 'Re: Your Rim Repair Enquiry', content,
+                                    thread_id=thread_id, message_id_header=message_id_header)
             except Exception as e:
                 logger.error(f"Could not send out-of-area decline email: {e}")
             state.mark_email_processed(msg_id)
@@ -920,27 +884,7 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
 
 def send_clarification_email(service, to_email, original_subject, missing_fields,
                               thread_id=None, message_id_header=None, booking_data=None):
-    # Build a summary of what was already captured so the customer knows we got their info
-    captured_parts = []
-    try:
-        if booking_data:
-            if booking_data.get('vehicle_make') and booking_data.get('vehicle_model'):
-                vehicle_str = f"your {booking_data.get('vehicle_year', '')} {booking_data['vehicle_make']} {booking_data['vehicle_model']}".strip()
-                captured_parts.append(vehicle_str)
-            elif booking_data.get('vehicle_make'):
-                captured_parts.append(f"your {booking_data['vehicle_make']}")
-            location = booking_data.get('address') or booking_data.get('suburb')
-            if location:
-                captured_parts.append(f"at {location}")
-            if booking_data.get('preferred_date'):
-                captured_parts.append(f"on {booking_data['preferred_date']}")
-    except Exception:
-        captured_parts = []
-
-    if captured_parts:
-        captured_summary = "We've noted " + ", ".join(captured_parts) + "."
-    else:
-        captured_summary = ""
+    from email_utils import send_customer_email, _p, _h2, _ul, _info_table, DARK
 
     name = 'there'
     try:
@@ -949,53 +893,47 @@ def send_clarification_email(service, to_email, original_subject, missing_fields
     except Exception:
         pass
 
-    fields_list = "\n".join(f"  - {f}" for f in missing_fields)
+    # Build a summary of what was already captured
+    captured_parts = []
+    try:
+        if booking_data:
+            if booking_data.get('vehicle_make') and booking_data.get('vehicle_model'):
+                vehicle_str = ' '.join(filter(None, [
+                    booking_data.get('vehicle_year', ''),
+                    booking_data['vehicle_make'],
+                    booking_data['vehicle_model'],
+                ])).strip()
+                captured_parts.append(('Vehicle', vehicle_str))
+            elif booking_data.get('vehicle_make'):
+                captured_parts.append(('Vehicle', booking_data['vehicle_make']))
+            location = booking_data.get('address') or booking_data.get('suburb')
+            if location:
+                captured_parts.append(('Location', location))
+            if booking_data.get('preferred_date'):
+                captured_parts.append(('Preferred date', booking_data['preferred_date']))
+    except Exception:
+        captured_parts = []
 
-    if captured_summary:
-        body = f"""Hi {name},
+    captured_block = _info_table(captured_parts) if captured_parts else ''
+    captured_intro = (
+        '<p style="color:#1e293b;font-size:15px;line-height:1.65;margin:0 0 14px;">'
+        'We\'ve noted the following details so far:</p>'
+        + captured_block
+    ) if captured_parts else ''
 
-Thank you for getting in touch with Rim Repair!
+    subject = original_subject if original_subject.startswith('Re:') else f'Re: {original_subject}'
 
-{captured_summary}
+    content = (
+        _p(f'Hi {name},')
+        + _p('Thank you for getting in touch with Perth Swedish &amp; European Auto Centre!')
+        + captured_intro
+        + _h2('Just a Few More Details')
+        + _p('To complete your booking we just need:')
+        + _ul(missing_fields)
+        + _p('Once we have this, we\'ll get your booking confirmed right away.')
+        + f'<p style="margin:24px 0 0;color:{DARK};font-size:15px;">'
+          f'Kind regards,<br><strong style="color:#C41230;">Rim Repair Team</strong></p>'
+    )
 
-To complete your booking, we just need a few more details:
-
-{fields_list}
-
-Once we have this information, we'll get your booking confirmed right away.
-
-Kind regards,
-Rim Repair Team"""
-    else:
-        body = f"""Hi {name},
-
-Thank you for getting in touch with Rim Repair!
-
-To complete your booking, we just need a few more details:
-
-{fields_list}
-
-Once we have this information, we'll get your booking confirmed right away.
-
-Kind regards,
-Rim Repair Team"""
-
-    if not original_subject.startswith('Re:'):
-        subject = f"Re: {original_subject}"
-    else:
-        subject = original_subject
-
-    message = MIMEText(body)
-    message['to'] = to_email
-    message['subject'] = subject
-
-    if message_id_header:
-        message['In-Reply-To'] = message_id_header
-        message['References'] = message_id_header
-
-    raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-    send_body = {'raw': raw}
-    if thread_id:
-        send_body['threadId'] = thread_id
-
-    service.users().messages().send(userId='me', body=send_body).execute()
+    send_customer_email(service, to_email, subject, content,
+                        thread_id=thread_id, message_id_header=message_id_header)

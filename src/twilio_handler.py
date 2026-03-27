@@ -417,66 +417,69 @@ def build_customer_confirmation_sms(booking_data):
 
 def send_confirmation_email(to_email, booking_data):
     try:
+        from email_utils import send_customer_email, _h2, _p, _info_table, _ul, RED, DARK
         service = get_gmail_service()
         name = booking_data.get('customer_name', 'there')
+        first = name.split()[0] if name and name != 'there' else 'there'
         date = _fmt_date(booking_data.get('preferred_date', 'TBC'))
         address = booking_data.get('address') or booking_data.get('suburb', 'your location')
         vehicle = ' '.join(filter(None, [
+            booking_data.get('vehicle_year'),
             booking_data.get('vehicle_colour'),
             booking_data.get('vehicle_make'),
-            booking_data.get('vehicle_model')
+            booking_data.get('vehicle_model'),
         ])) or 'your vehicle'
-        service_type = booking_data.get('service_type', 'rim repair').replace('_', ' ')
+        service_type = booking_data.get('service_type', 'rim repair').replace('_', ' ').title()
+        num_rims = booking_data.get('num_rims')
+        if num_rims:
+            service_type += f' \u00d7{num_rims} rims'
 
-        body = f"""Hi {name},
+        info_rows = [
+            ('Date', date),
+            ('Address', address),
+            ('Vehicle', vehicle),
+            ('Service', service_type),
+        ]
 
-Thank you for choosing Rim Repair. We're pleased to confirm your booking — the details are outlined below.
+        content = (
+            _p(f'Hi {first},')
+            + _p('Thank you for choosing Perth Swedish &amp; European Auto Centre. '
+                 'We\'re pleased to confirm your booking — the details are below.')
+            + _h2('Booking Confirmation')
+            + _info_table(info_rows)
+            + _p('Our technician will come directly to you at the address provided. '
+                 'You\'ll receive a reminder on the morning of your appointment with your specific arrival window.')
+            + _p('If you need to make any changes or have questions before your appointment, '
+                 'simply reply to this email.')
+            + _p(f'We look forward to seeing you on <strong>{date}</strong>.',
+                 f'color:{DARK};')
+            + f'<p style="margin:24px 0 0;color:{DARK};font-size:15px;">'
+              f'Kind regards,<br><strong style="color:#C41230;">Rim Repair Team</strong></p>'
+        )
 
-Booking Confirmation
---------------------
-Date:     {date}
-Address:  {address}
-Vehicle:  {vehicle}
-Service:  {service_type.title()}
-
-Our technician will come directly to you at the address provided. You will receive a separate notification on the morning of your appointment with your specific time window.
-
-Payment is by EFTPOS on the day of the appointment.
-
-If you need to make any changes or have any questions prior to your appointment, please don't hesitate to reply to this email.
-
-We look forward to seeing you.
-
-Kind regards,
-Rim Repair Team"""
-
-        message = MIMEText(body)
-        message['to'] = to_email
-        message['subject'] = "Booking Confirmation — Rim Repair"
-        raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-        service.users().messages().send(userId='me', body={'raw': raw}).execute()
+        send_customer_email(service, to_email, 'Booking Confirmed — Perth Swedish & European Auto Centre', content)
         logger.info(f"Confirmation email sent to {to_email}")
     except Exception as e:
         logger.error(f"Email send error: {e}")
 
 def send_decline_email(to_email, booking_data):
     try:
+        from email_utils import send_customer_email, _p, _h2, DARK
         service = get_gmail_service()
         name = booking_data.get('customer_name', 'there')
-        body = f"""Hi {name},
+        first = name.split()[0] if name and name != 'there' else 'there'
 
-Thank you for reaching out to Rim Repair.
+        content = (
+            _p(f'Hi {first},')
+            + _p('Thank you for reaching out to Perth Swedish &amp; European Auto Centre.')
+            + _p('Unfortunately we\'re unable to accommodate your requested time slot. '
+                 'We\'d love to find a time that works for you — please reply to this email '
+                 'with your availability and we\'ll do our best to get you booked in as soon as possible.')
+            + _p('We apologise for any inconvenience and look forward to hearing from you.')
+            + f'<p style="margin:24px 0 0;color:{DARK};font-size:15px;">'
+              f'Kind regards,<br><strong style="color:#C41230;">Rim Repair Team</strong></p>'
+        )
 
-Unfortunately, we're unable to accommodate your requested time. We'd love to find a time that works for you — please reply to this email with your availability and we'll do our best to get you booked in as soon as possible.
-
-We apologise for any inconvenience and look forward to hearing from you.
-
-Kind regards,
-Rim Repair Team"""
-        message = MIMEText(body)
-        message['to'] = to_email
-        message['subject'] = "Re: Your Rim Repair Enquiry"
-        raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-        service.users().messages().send(userId='me', body={'raw': raw}).execute()
+        send_customer_email(service, to_email, 'Re: Your Rim Repair Enquiry', content)
     except Exception as e:
         logger.error(f"Decline email send error: {e}")

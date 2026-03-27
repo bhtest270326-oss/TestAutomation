@@ -289,46 +289,50 @@ def _send_morning_email(to_email, booking_data):
     """Send the day-of morning notification email to a customer."""
     try:
         from google_auth import get_gmail_service
-        from email.mime.text import MIMEText
-        import base64
+        from email_utils import send_customer_email, _p, _h2, _info_table, _ul, DARK
 
         service = get_gmail_service()
 
         name = booking_data.get('customer_name', 'there')
+        first = name.split()[0] if name and name != 'there' else 'there'
         time_str = booking_data.get('preferred_time') or '09:00'
         window = _time_window(time_str)
         address = booking_data.get('address') or booking_data.get('suburb', 'your location')
         vehicle = ' '.join(filter(None, [
+            booking_data.get('vehicle_year'),
             booking_data.get('vehicle_colour'),
             booking_data.get('vehicle_make'),
-            booking_data.get('vehicle_model')
+            booking_data.get('vehicle_model'),
         ])) or 'your vehicle'
 
-        body = f"""Hi {name},
+        content = (
+            _p(f'Hi {first},')
+            + _p('We hope you\'re having a great start to your day!')
+            + _h2('Your Technician is on the Way')
+            + _info_table([
+                ('Arrival window', window),
+                ('Location', address),
+                ('Vehicle', vehicle),
+            ])
+            + _p('To make sure we can get started straight away, please ensure:')
+            + _ul([
+                f'Sufficient clear working space around <strong>{vehicle}</strong>',
+                'The vehicle is accessible and parked in a flat, open area',
+                'You, or someone authorised on your behalf, is available to approve the work '
+                'and process payment by EFTPOS on the day',
+            ])
+            + _p('If anything has changed or you need to reach us before the visit, '
+                 'simply reply to this email.')
+            + f'<p style="margin:24px 0 0;color:{DARK};font-size:15px;">'
+              f'We look forward to seeing you today!<br><br>'
+              f'Kind regards,<br><strong style="color:#C41230;">Rim Repair Team</strong></p>'
+        )
 
-We hope you're having a great start to your day!
-
-Just a friendly heads-up — your Rim Repair technician will be visiting you today at {address} between {window}.
-
-To make sure we can get started straight away, could you please ensure:
-
-  - There is sufficient clear working space around {vehicle}
-  - The vehicle is accessible and ideally parked in a flat, open area
-  - You, or someone authorised on your behalf, is available to approve the work and process payment by EFTPOS on the day
-
-If anything has changed or you need to reach us before the visit, simply reply to this email.
-
-We look forward to seeing you today!
-
-Kind regards,
-Rim Repair Team"""
-
-        message = MIMEText(body)
-        message['to'] = to_email
-        message['subject'] = "Your Rim Repair Technician is Visiting Today"
-
-        raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-        service.users().messages().send(userId='me', body={'raw': raw}).execute()
+        send_customer_email(
+            service, to_email,
+            'Your Rim Repair Technician is on the Way Today',
+            content
+        )
         logger.info(f"Morning notification email sent to {to_email}")
     except Exception as e:
         logger.error(f"Morning notification email error: {e}")

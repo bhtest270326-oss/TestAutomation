@@ -230,18 +230,24 @@ def format_availability_response(
     Returns:
         HTML email body string.
     """
+    # Colours from email_utils (imported lazily to avoid circular deps at module level)
+    RED   = '#C41230'
+    DARK  = '#1e293b'
+    MUTED = '#64748b'
+
     service_line = f" for a {service_description}" if service_description else ''
 
     table_rows = ''
     for slot in availability:
         if slot['available']:
-            badge = '<span style="color:#16a34a;font-weight:600;">Yes</span>'
+            badge = f'<span style="color:#16a34a;font-weight:700;">&#10003; Yes</span>'
         else:
-            badge = '<span style="color:#dc2626;font-weight:600;">No</span>'
+            badge = f'<span style="color:{RED};font-weight:700;">&#10007; No</span>'
         table_rows += (
             f'<tr>'
-            f'<td style="padding:10px 16px;border-bottom:1px solid #e2e8f0;">{slot["day_name"]}</td>'
-            f'<td style="padding:10px 16px;border-bottom:1px solid #e2e8f0;">{badge}</td>'
+            f'<td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;'
+            f'font-size:14px;color:{DARK};">{slot["day_name"]}</td>'
+            f'<td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;">{badge}</td>'
             f'</tr>'
         )
 
@@ -254,38 +260,44 @@ def format_availability_response(
         'Description of the damage or repair needed (e.g. kerb rash on front-left rim)',
     ]
     fields_html = ''.join(
-        f'<li style="margin-bottom:4px;">{f}</li>' for f in fields
+        f'<li style="margin-bottom:6px;color:{DARK};font-size:14px;">{f}</li>'
+        for f in fields
     )
 
-    body = (
-        '<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'
-        '\'Segoe UI\',Roboto,sans-serif;color:#1e293b;font-size:15px;line-height:1.6;'
-        'max-width:520px;margin:0 auto;padding:24px 16px;">'
-        f'<p>Hi {customer_name},</p>'
-        '<p>Thank you for reaching out to Rim Repair!</p>'
-        f'<p>Here is our availability for the coming week{service_line}:</p>'
-        '<table style="border-collapse:collapse;width:100%;max-width:340px;'
-        'border:1px solid #e2e8f0;margin:16px 0;">'
-        '<thead><tr style="background:#f1f5f9;">'
-        '<th style="padding:10px 16px;text-align:left;font-size:13px;font-weight:700;'
-        'text-transform:uppercase;letter-spacing:0.05em;color:#475569;'
-        'border-bottom:2px solid #e2e8f0;">Day</th>'
-        '<th style="padding:10px 16px;text-align:left;font-size:13px;font-weight:700;'
-        'text-transform:uppercase;letter-spacing:0.05em;color:#475569;'
-        'border-bottom:2px solid #e2e8f0;">Available</th>'
-        '</tr></thead>'
+    # Return inner content only — caller wraps in build_email_html()
+    content = (
+        f'<p style="color:{DARK};font-size:15px;line-height:1.65;margin:0 0 14px;">'
+        f'Hi {customer_name},</p>'
+        f'<p style="color:{DARK};font-size:15px;line-height:1.65;margin:0 0 14px;">'
+        f'Thank you for reaching out to Perth Swedish &amp; European Auto Centre!</p>'
+        f'<h2 style="color:{RED};font-size:18px;font-weight:700;margin:0 0 16px;'
+        f'padding-bottom:10px;border-bottom:2px solid {RED};">'
+        f'Availability{service_line.replace("for a ", "— ").title() if service_line else ""}</h2>'
+        f'<p style="color:{DARK};font-size:15px;margin:0 0 12px;">'
+        f'Here is our availability for the coming week{service_line}:</p>'
+        f'<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;'
+        f'width:100%;max-width:360px;border:1px solid #e2e8f0;margin:0 0 20px;'
+        f'border-radius:4px;overflow:hidden;">'
+        f'<thead><tr style="background:{RED};">'
+        f'<th style="padding:10px 14px;text-align:left;font-size:12px;font-weight:700;'
+        f'text-transform:uppercase;letter-spacing:0.06em;color:#ffffff;">Day</th>'
+        f'<th style="padding:10px 14px;text-align:left;font-size:12px;font-weight:700;'
+        f'text-transform:uppercase;letter-spacing:0.06em;color:#ffffff;">Available</th>'
+        f'</tr></thead>'
         f'<tbody>{table_rows}</tbody>'
-        '</table>'
-        '<p><strong>To confirm your booking in one reply,</strong> simply let us know '
-        'your preferred available day and include the following details:</p>'
-        f'<ul style="margin:8px 0 16px 0;padding-left:20px;">{fields_html}</ul>'
-        '<p>Payment is by EFTPOS on the day of the appointment. '
-        'We look forward to hearing from you!</p>'
-        '<p>Kind regards,<br><strong>Rim Repair Team</strong></p>'
-        '</body></html>'
+        f'</table>'
+        f'<p style="color:{DARK};font-size:15px;line-height:1.65;margin:0 0 10px;">'
+        f'<strong>To confirm your booking in one reply,</strong> simply let us know '
+        f'your preferred available day and include the following details:</p>'
+        f'<ul style="margin:8px 0 20px;padding-left:20px;">{fields_html}</ul>'
+        f'<p style="color:{DARK};font-size:15px;line-height:1.65;margin:0 0 24px;">'
+        f'Payment is by EFTPOS on the day of the appointment. '
+        f'We look forward to hearing from you!</p>'
+        f'<p style="margin:0;color:{DARK};font-size:15px;">'
+        f'Kind regards,<br><strong style="color:{RED};">Rim Repair Team</strong></p>'
     )
 
-    return body
+    return content
 
 
 EXTRACTION_PROMPT = """You are a booking assistant for a mobile rim repair business in Perth, Western Australia.
