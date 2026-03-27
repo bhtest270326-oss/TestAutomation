@@ -443,7 +443,7 @@ def handle_owner_day_cancellation(date_str: str, reason: str) -> None:
     cancelled = state.cancel_all_bookings_for_date(date_str, reason, 'owner_sms')
 
     if not cancelled:
-        send_sms(os.environ['OWNER_MOBILE'], f"No confirmed bookings found for {date_str}.")
+        send_sms(os.environ['OWNER_MOBILE'], f"No confirmed bookings found for {_fmt_date(date_str)}.")
         return
 
     auto_notify = get_flag('flag_day_cancellation_auto_notify')
@@ -474,7 +474,7 @@ def handle_owner_day_cancellation(date_str: str, reason: str) -> None:
             try:
                 msg = (
                     f"Hi {customer_name}, unfortunately we need to cancel your Rim Repair "
-                    f"appointment on {date_str} due to {reason}. We sincerely apologise. "
+                    f"appointment on {_fmt_date(date_str)} due to {reason}. We sincerely apologise. "
                     f"Please reply or email us to rebook at your convenience. - Rim Repair Team"
                 )
                 send_sms(customer_phone, msg)
@@ -491,7 +491,7 @@ def handle_owner_day_cancellation(date_str: str, reason: str) -> None:
                 content = (
                     _p(f'Hi {customer_name},')
                     + _p(f'We regret to inform you that your Rim Repair appointment on '
-                         f'<strong>{date_str}</strong> has been cancelled due to {reason}.')
+                         f'<strong>{_fmt_date(date_str)}</strong> has been cancelled due to {reason}.')
                     + _p('We sincerely apologise for the inconvenience. '
                          'Please reply to this email or call us and we\'ll get you rebooked as soon as possible.')
                     + _p('We\'ll do our best to prioritise your rebooking.')
@@ -499,7 +499,7 @@ def handle_owner_day_cancellation(date_str: str, reason: str) -> None:
                     f'Kind regards,<br><strong style="color:{RED};">Rim Repair Team</strong></p>'
                 )
                 send_customer_email(service, customer_email,
-                    f'Appointment Cancelled — {date_str}', content)
+                    f'Appointment Cancelled — {_fmt_date(date_str)}', content)
             except Exception as e:
                 logger.error(f"Could not email customer for cancelled booking {b['id']}: {e}")
 

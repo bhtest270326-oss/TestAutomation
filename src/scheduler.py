@@ -16,6 +16,16 @@ from feature_flags import get_flag
 
 logger = logging.getLogger(__name__)
 
+
+def _fmt_date(date_str):
+    """Format 'YYYY-MM-DD' as 'Monday, 31 March 2026'. Returns original string on failure."""
+    try:
+        dt = datetime.strptime(date_str, '%Y-%m-%d')
+        return dt.strftime('%A, %d %B %Y').replace(' 0', ' ')
+    except Exception:
+        return date_str
+
+
 GOOGLE_REVIEW_LINK = os.environ.get('GOOGLE_REVIEW_LINK', '')
 PERTH_UTC_OFFSET = 8  # UTC+8
 
@@ -609,7 +619,7 @@ def check_pending_booking_expiry():
         preferred_date = booking_data.get('preferred_date', 'unknown date')
 
         msg = (
-            f"Reminder: Booking {booking_id} for {customer_name} on {preferred_date} "
+            f"Reminder: Booking {booking_id} for {customer_name} on {_fmt_date(preferred_date)} "
             f"still needs your YES or NO. "
             f"Reply YES {booking_id} or NO {booking_id}"
         )
@@ -927,7 +937,7 @@ def check_waitlist_opportunities():
                     content = (
                         _p(f'Hi {cust_name},')
                         + _p(f'Great news! A spot has become available on '
-                             f'<strong>{date_str}</strong> — a date you previously enquired about.')
+                             f'<strong>{_fmt_date(date_str)}</strong> — a date you previously enquired about.')
                         + _p('If you\'re still interested in booking, simply reply to this email '
                              'and we\'ll get you confirmed as soon as possible.')
                         + _p('Availability is limited, so please reply promptly to secure your spot.')
@@ -937,7 +947,7 @@ def check_waitlist_opportunities():
 
                     send_customer_email(
                         service, entry['customer_email'],
-                        f'Availability Update — {date_str}', content
+                        f'Availability Update — {_fmt_date(date_str)}', content
                     )
                     state.mark_waitlist_notified(entry['id'])
                     logger.info(f"Waitlist notification sent to {entry['customer_email']} for {date_str}")
