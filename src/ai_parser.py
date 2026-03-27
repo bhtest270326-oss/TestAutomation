@@ -78,10 +78,11 @@ def extract_booking_details(message_body, subject="", customer_email=""):
         if subject:
             full_message = f"Subject: {subject}\n\n{message_body}"
 
+        prompt = EXTRACTION_PROMPT.replace('{today}', today).replace('{message}', full_message)
         response = client.messages.create(
             model="claude-3-5-sonnet-20241022",
             max_tokens=1000,
-            messages=[{"role": "user", "content": EXTRACTION_PROMPT.format(today=today, message=full_message)}]
+            messages=[{"role": "user", "content": prompt}]
         )
 
         raw = response.content[0].text.strip()
@@ -101,10 +102,10 @@ def extract_booking_details(message_body, subject="", customer_email=""):
         return booking_data, missing_fields, needs_clarification
 
     except json.JSONDecodeError as e:
-        logger.error(f"JSON parse error: {e}")
+        logger.error(f"AI_PARSE_FAIL json_decode: {e}")
         return {}, ["the details of your booking request — please resend with your name, address, preferred date, and service type"], True
     except Exception as e:
-        logger.error(f"AI extraction error: {e}", exc_info=True)
+        logger.error(f"AI_PARSE_FAIL {type(e).__name__}: {e}", exc_info=True)
         return {}, ["the details of your booking request — please resend with your name, address, preferred date, and service type"], True
 
 
@@ -116,15 +117,15 @@ def parse_owner_correction(original_booking, correction_text, slot_hint=None):
             f"Use this date and time when the owner asks to find a free slot.\n"
             if slot_hint else ""
         )
+        prompt = (CORRECTION_PROMPT
+                  .replace('{today}', today)
+                  .replace('{booking_json}', json.dumps(original_booking, indent=2))
+                  .replace('{correction_text}', correction_text)
+                  .replace('{slot_hint}', hint_text))
         response = client.messages.create(
             model="claude-3-5-sonnet-20241022",
             max_tokens=1000,
-            messages=[{"role": "user", "content": CORRECTION_PROMPT.format(
-                today=today,
-                booking_json=json.dumps(original_booking, indent=2),
-                correction_text=correction_text,
-                slot_hint=hint_text
-            )}]
+            messages=[{"role": "user", "content": prompt}]
         )
 
         raw = response.content[0].text.strip()
