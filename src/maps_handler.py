@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 logger = logging.getLogger(__name__)
 
 GOOGLE_MAPS_API_KEY = os.environ.get('GOOGLE_MAPS_API_KEY', '')
+BUSINESS_ADDRESS = '76 Albert St, Osborne Park WA 6017'
 JOB_DURATION_MINUTES = 120
 BUSINESS_START_HOUR = 8    # 8:00 AM — first job of the day
 BUSINESS_LATEST_START = 15  # 3:00 PM — last job must start by this to finish by ~5pm
@@ -87,7 +88,12 @@ def find_next_available_slot(target_date_str, new_address, day_bookings):
     latest_start = target_date.replace(hour=BUSINESS_LATEST_START, minute=0, second=0, microsecond=0)
 
     if not day_bookings:
-        return target_date_str, day_start.strftime("%H:%M")
+        # First job of the day — measure travel from the business address
+        travel_from_base = get_travel_minutes(BUSINESS_ADDRESS, new_address)
+        first_start = day_start + timedelta(minutes=travel_from_base)
+        if first_start > day_start.replace(hour=BUSINESS_LATEST_START):
+            first_start = day_start  # fallback if Maps gives a crazy result
+        return target_date_str, first_start.strftime("%H:%M")
 
     # Build sorted list of (start, end, address) for existing jobs
     existing = []
@@ -105,14 +111,15 @@ def find_next_available_slot(target_date_str, new_address, day_bookings):
     if not existing:
         return target_date_str, day_start.strftime("%H:%M")
 
-    # Walk through the day looking for a gap
+    # Walk through the day looking for a gap.
+    # Always start from the business address so the first job accounts for travel from base.
     prev_end = day_start
-    prev_addr = None
+    prev_addr = BUSINESS_ADDRESS
 
     for job_start, job_end, job_addr in existing:
         # Earliest we can start the new job (travel from previous position)
-        travel_to_new = get_travel_minutes(prev_addr, new_address) if prev_addr else 0
-        earliest = prev_end + timedelta(minutes=travel_to_new) if prev_addr else prev_end
+        travel_to_new = get_travel_minutes(prev_addr, new_address)
+        earliest = prev_end + timedelta(minutes=travel_to_new)
 
         # Travel from new job to the upcoming existing job
         travel_new_to_next = get_travel_minutes(new_address, job_addr) if (new_address and job_addr) else 30
@@ -128,7 +135,7 @@ def find_next_available_slot(target_date_str, new_address, day_bookings):
         prev_addr = job_addr
 
     # Try slotting after the last existing job
-    travel_from_last = get_travel_minutes(prev_addr, new_address) if prev_addr else 0
+    travel_from_last = get_travel_minutes(prev_addr, new_address)
     candidate = prev_end + timedelta(minutes=travel_from_last)
 
     if candidate <= latest_start:

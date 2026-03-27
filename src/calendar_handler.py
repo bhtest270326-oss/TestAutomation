@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from maps_handler import get_travel_minutes
+from maps_handler import get_travel_minutes, BUSINESS_ADDRESS
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +53,12 @@ def _get_previous_job_address(booking_data):
                     candidates.append((s, addr))
 
         if not candidates:
-            return None
+            # First job of the day — travel is measured from the business address
+            return BUSINESS_ADDRESS
         candidates.sort(key=lambda x: x[0], reverse=True)
         return candidates[0][1]
     except Exception:
-        return None
+        return BUSINESS_ADDRESS
 
 
 def create_calendar_event(booking_data):
