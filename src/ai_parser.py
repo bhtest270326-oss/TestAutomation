@@ -78,7 +78,11 @@ def extract_booking_details(message_body, subject="", customer_email=""):
         if subject:
             full_message = f"Subject: {subject}\n\n{message_body}"
 
-        prompt = EXTRACTION_PROMPT.replace('{today}', today).replace('{message}', full_message)
+        prompt = (EXTRACTION_PROMPT
+                  .replace('{today}', today)
+                  .replace('{message}', full_message)
+                  .replace('{{', '{')
+                  .replace('}}', '}'))
         response = client.messages.create(
             model="claude-3-5-sonnet-20241022",
             max_tokens=1000,
