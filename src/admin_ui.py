@@ -503,8 +503,8 @@ def api_gmail():
             booking_status = None
             for lid in label_ids:
                 name = label_map.get(lid, '')
-                if name.startswith('Rim Repairs/'):
-                    booking_status = name[len('Rim Repairs/'):]
+                if name in ('Pending Reply', 'Awaiting Confirmation', 'Confirmed', 'Declined', 'Processed'):
+                    booking_status = name
                     break
 
             inbox.append({

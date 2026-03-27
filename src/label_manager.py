@@ -6,23 +6,23 @@ logger = logging.getLogger(__name__)
 # Label definitions with Gmail colour codes
 # Gmail background/text colour pairs (from Gmail API colour palette)
 LABELS = {
-    'Rim Repairs/Pending Reply': {
+    'Pending Reply': {
         'color': {'backgroundColor': '#fb4c2f', 'textColor': '#ffffff'},  # Red - awaiting customer info
         'description': 'Customer contacted, awaiting more info from them'
     },
-    'Rim Repairs/Awaiting Confirmation': {
+    'Awaiting Confirmation': {
         'color': {'backgroundColor': '#ffad47', 'textColor': '#ffffff'},  # Orange - sent to owner
         'description': 'Booking details extracted, awaiting owner YES/NO'
     },
-    'Rim Repairs/Confirmed': {
+    'Confirmed': {
         'color': {'backgroundColor': '#16a766', 'textColor': '#ffffff'},  # Green - confirmed
         'description': 'Booking confirmed, calendar event created'
     },
-    'Rim Repairs/Declined': {
+    'Declined': {
         'color': {'backgroundColor': '#8e63ce', 'textColor': '#ffffff'},  # Purple - declined
         'description': 'Booking declined by owner'
     },
-    'Rim Repairs/Processed': {
+    'Processed': {
         'color': {'backgroundColor': '#999999', 'textColor': '#ffffff'},  # Grey - catch-all processed
         'description': 'Email has been processed by the booking system'
     },
@@ -104,18 +104,18 @@ def initialise_labels(service):
 
 def label_pending_reply(service, msg_id):
     """Red — we asked customer for more info, waiting on them."""
-    apply_label(service, msg_id, 'Rim Repairs/Pending Reply',
-                remove_labels=['Rim Repairs/Awaiting Confirmation', 'Rim Repairs/Confirmed', 'Rim Repairs/Declined', 'Rim Repairs/Processed'])
+    apply_label(service, msg_id, 'Pending Reply',
+                remove_labels=['Awaiting Confirmation', 'Confirmed', 'Declined', 'Processed'])
 
 def label_awaiting_confirmation(service, msg_id):
     """Orange — booking extracted, sent to owner for YES/NO."""
-    apply_label(service, msg_id, 'Rim Repairs/Awaiting Confirmation',
-                remove_labels=['Rim Repairs/Pending Reply', 'Rim Repairs/Confirmed', 'Rim Repairs/Declined', 'Rim Repairs/Processed'])
+    apply_label(service, msg_id, 'Awaiting Confirmation',
+                remove_labels=['Pending Reply', 'Confirmed', 'Declined', 'Processed'])
 
 def label_confirmed(service, msg_id):
     """Green — owner confirmed, calendar event created. Archived out of inbox."""
-    apply_label(service, msg_id, 'Rim Repairs/Confirmed',
-                remove_labels=['Rim Repairs/Pending Reply', 'Rim Repairs/Awaiting Confirmation', 'Rim Repairs/Declined', 'Rim Repairs/Processed'])
+    apply_label(service, msg_id, 'Confirmed',
+                remove_labels=['Pending Reply', 'Awaiting Confirmation', 'Declined', 'Processed'])
     # Archive — remove from inbox so it sits in the Confirmed label folder
     try:
         service.users().messages().modify(
@@ -129,10 +129,10 @@ def label_confirmed(service, msg_id):
 
 def label_declined(service, msg_id):
     """Purple — owner declined."""
-    apply_label(service, msg_id, 'Rim Repairs/Declined',
-                remove_labels=['Rim Repairs/Pending Reply', 'Rim Repairs/Awaiting Confirmation', 'Rim Repairs/Confirmed', 'Rim Repairs/Processed'])
+    apply_label(service, msg_id, 'Declined',
+                remove_labels=['Pending Reply', 'Awaiting Confirmation', 'Confirmed', 'Processed'])
 
 def label_processed(service, msg_id):
     """Grey — processed, no action needed."""
-    apply_label(service, msg_id, 'Rim Repairs/Processed',
-                remove_labels=['Rim Repairs/Pending Reply', 'Rim Repairs/Awaiting Confirmation', 'Rim Repairs/Confirmed', 'Rim Repairs/Declined'])
+    apply_label(service, msg_id, 'Processed',
+                remove_labels=['Pending Reply', 'Awaiting Confirmation', 'Confirmed', 'Declined'])
