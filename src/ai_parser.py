@@ -148,37 +148,21 @@ def parse_owner_correction(original_booking, correction_text, slot_hint=None):
 
 
 def format_booking_for_owner(booking_data):
-    name = booking_data.get('customer_name') or 'Unknown'
+    name = (booking_data.get('customer_name') or 'Unknown').split()[0]
     phone = booking_data.get('customer_phone') or booking_data.get('customer_email') or 'N/A'
     vehicle = ' '.join(filter(None, [
         booking_data.get('vehicle_colour'),
         booking_data.get('vehicle_make'),
         booking_data.get('vehicle_model')
-    ])) or 'Unknown vehicle'
-
-    service = booking_data.get('service_type', 'unknown').replace('_', ' ').title()
+    ])) or '?'
+    service = booking_data.get('service_type', 'rim_repair').replace('_', ' ').title()
     num_rims = booking_data.get('num_rims')
     if num_rims:
         service += f" x{num_rims}"
-
     date = booking_data.get('preferred_date') or 'TBC'
     time = booking_data.get('preferred_time') or 'TBC'
     address = booking_data.get('address') or booking_data.get('suburb') or 'TBC'
-    notes = booking_data.get('notes')
-
-    msg = f"""NEW BOOKING REQUEST
-Name: {name}
-Contact: {phone}
-Vehicle: {vehicle}
-Service: {service}
-Date: {date} at {time}
-Address: {address}"""
-
-    if notes:
-        msg += f"\nNotes: {notes}"
-
-    msg += "\n\nReply YES to confirm, NO to decline, or send any changes (e.g. 'find a free slot on 01/04', 'change time to 11am')"
-    return msg
+    return f"JOB {name}|{phone}\n{vehicle}\n{service}\n{date} {time}\n{address}\nYES/NO/edit"
 
 
 def merge_booking_data(original, new_data):
