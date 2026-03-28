@@ -69,7 +69,7 @@ async function initDashboard() {
     }
   } catch (err) {
     console.error('Dashboard recent bookings error:', err);
-    showSectionError('dashboard-recent-bookings', 'Could not load pending bookings');
+    showSectionError('recent-bookings-tbody', 'Could not load pending bookings');
   }
 
   // Today's jobs
@@ -81,7 +81,7 @@ async function initDashboard() {
     }
   } catch (err) {
     console.error('Dashboard today jobs error:', err);
-    showSectionError('dashboard-today-jobs', "Could not load today's jobs");
+    showSectionError('today-jobs-list', "Could not load today's jobs");
   }
 
   // System status
@@ -122,20 +122,17 @@ function showDashboardSkeletons() {
   }
 
   const skeletonRow = `
-    <div class="ap-skeleton ap-skeleton-row"></div>
-    <div class="ap-skeleton ap-skeleton-row"></div>
-    <div class="ap-skeleton ap-skeleton-row"></div>
+    <tr><td colspan="5"><div class="ap-skeleton ap-skeleton-row"></div></td></tr>
+    <tr><td colspan="5"><div class="ap-skeleton ap-skeleton-row"></div></td></tr>
+    <tr><td colspan="5"><div class="ap-skeleton ap-skeleton-row"></div></td></tr>
   `;
-  const recentEl = document.getElementById('dashboard-recent-bookings');
+  const recentEl = document.getElementById('recent-bookings-tbody');
   if (recentEl) recentEl.innerHTML = skeletonRow;
 
-  const todayEl = document.getElementById('dashboard-today-jobs');
-  if (todayEl) todayEl.innerHTML = skeletonRow;
+  const todayEl = document.getElementById('today-jobs-list');
+  if (todayEl) todayEl.innerHTML = '<div class="ap-skeleton ap-skeleton-row"></div><div class="ap-skeleton ap-skeleton-row"></div>';
 
-  const statusEl = document.getElementById('dashboard-system-status');
-  if (statusEl) {
-    statusEl.innerHTML = '<div class="ap-skeleton ap-skeleton-row"></div>';
-  }
+  // System status dots — just leave as "Checking…" during skeleton state
 }
 
 // ---------------------------------------------------------------------------
@@ -221,21 +218,11 @@ function showPipelineError(msg) {
 // ---------------------------------------------------------------------------
 
 function renderRecentBookings(bookings) {
-  let container = document.getElementById('dashboard-recent-bookings');
-  if (!container) {
-    const section = document.querySelector('[data-section="dashboard"]') ||
-                    document.getElementById('section-dashboard');
-    if (section) {
-      container = document.createElement('div');
-      container.id = 'dashboard-recent-bookings';
-      section.appendChild(container);
-    } else {
-      return;
-    }
-  }
+  const tbody = document.getElementById('recent-bookings-tbody');
+  if (!tbody) return;
 
   if (!bookings || bookings.length === 0) {
-    container.innerHTML = '<div class="ap-empty-state">&#10003; No bookings awaiting approval</div>';
+    tbody.innerHTML = '<tr><td colspan="5" class="ap-table-empty">&#10003; No bookings awaiting approval</td></tr>';
     return;
   }
 
@@ -247,7 +234,7 @@ function renderRecentBookings(bookings) {
       ? bd.service_type.replace(/_/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); })
       : 'Rim Repair');
     const date        = escHtml(b.preferred_date || bd.preferred_date || '—');
-    const statusBadge = `<span class="ap-badge ap-badge-amber">Pending</span>`;
+    const statusBadge = '<span class="ap-badge ap-badge-amber">Pending</span>';
     const id          = escHtml(b.id || '');
 
     rows += `
@@ -266,20 +253,7 @@ function renderRecentBookings(bookings) {
     `;
   });
 
-  container.innerHTML = `
-    <table class="ap-table ap-table-compact">
-      <thead>
-        <tr>
-          <th>Customer</th>
-          <th>Service</th>
-          <th>Date</th>
-          <th>Status</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
-  `;
+  tbody.innerHTML = rows;
 }
 
 // ---------------------------------------------------------------------------
@@ -287,7 +261,7 @@ function renderRecentBookings(bookings) {
 // ---------------------------------------------------------------------------
 
 function renderTodayJobs(bookings) {
-  const container = document.getElementById('dashboard-today-jobs');
+  const container = document.getElementById('today-jobs-list');
   if (!container) return;
 
   if (!bookings || bookings.length === 0) {
@@ -332,54 +306,44 @@ function renderTodayJobs(bookings) {
 // ---------------------------------------------------------------------------
 
 function renderSystemStatus(health) {
-  const container = document.getElementById('dashboard-system-status');
-  if (!container) return;
-
+  // API returns {gmail:{status:'ok',...}, db:{status:'ok',...}, anthropic:{...}, twilio:{...}}
+  // HTML has cards for Gmail, Calendar (repurposed to Anthropic AI), and Database
   const services = [
-    { key: 'database',   label: 'Database',   icon: '&#128451;' },
-    { key: 'gmail',      label: 'Gmail',      icon: '&#128140;' },
-    { key: 'anthropic',  label: 'Anthropic',  icon: '&#129302;' },
-    { key: 'twilio',     label: 'Twilio',     icon: '&#128222;' },
+    { key: 'gmail',     dotId: 'status-gmail-dot',     textId: 'status-gmail-text' },
+    { key: 'anthropic', dotId: 'status-calendar-dot',  textId: 'status-calendar-text' },
+    { key: 'db',        dotId: 'status-db-dot',        textId: 'status-db-text' },
   ];
 
-  let html = '<div class="ap-status-row">';
   services.forEach(function(svc) {
-    let statusClass = 'ap-status-unknown';
-    let statusText  = 'Unknown';
+    const dot  = document.getElementById(svc.dotId);
+    const text = document.getElementById(svc.textId);
+    if (!dot && !text) return;
+
+    let dotClass  = 'ap-status-dot';
+    let labelText = 'Unknown';
 
     if (health) {
-      const val = health[svc.key];
-      if (val === true || val === 'ok' || val === 'healthy') {
-        statusClass = 'ap-status-ok';
-        statusText  = 'OK';
-      } else if (val === false || val === 'error' || val === 'unhealthy') {
-        statusClass = 'ap-status-error';
-        statusText  = 'Error';
-      } else if (val === 'degraded' || val === 'warning') {
-        statusClass = 'ap-status-warning';
-        statusText  = 'Degraded';
-      } else if (val !== null && val !== undefined) {
-        statusClass = 'ap-status-ok';
-        statusText  = String(val);
+      const entry = health[svc.key];
+      // entry is an object {status: 'ok'/'error'/'unconfigured'/'configured', ...}
+      const statusVal = entry ? (entry.status || entry) : null;
+      if (statusVal === 'ok' || statusVal === 'healthy' || statusVal === 'configured') {
+        dotClass  += ' ap-status-ok';
+        labelText  = statusVal === 'configured' ? 'Configured' : 'OK';
+      } else if (statusVal === 'error' || statusVal === 'unhealthy') {
+        dotClass  += ' ap-status-error';
+        labelText  = 'Error';
+      } else if (statusVal === 'unconfigured') {
+        dotClass  += ' ap-status-warning';
+        labelText  = 'Not set';
+      } else if (statusVal) {
+        dotClass  += ' ap-status-ok';
+        labelText  = String(statusVal);
       }
     }
 
-    html += `
-      <div class="ap-status-item">
-        <span class="ap-status-dot ${statusClass}"></span>
-        <span class="ap-status-icon">${svc.icon}</span>
-        <span class="ap-status-label">${svc.label}</span>
-        <span class="ap-status-text ${statusClass}">${statusText}</span>
-      </div>
-    `;
+    if (dot)  dot.className  = dotClass;
+    if (text) text.textContent = labelText;
   });
-  html += '</div>';
-
-  if (health && health.last_checked) {
-    html += `<div class="ap-status-timestamp">Last checked: ${escHtml(health.last_checked)}</div>`;
-  }
-
-  container.innerHTML = html;
 }
 
 // ---------------------------------------------------------------------------

@@ -75,11 +75,19 @@ def register(bp, require_auth):
         sid = _create_session()
 
         resp = Response(html, mimetype='text/html')
+        # Prevent browser/CDN caching so every deploy serves fresh HTML+JS
+        resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+        resp.headers['Pragma'] = 'no-cache'
+        # Secure flag only on Railway (HTTPS); omit for local HTTP dev
+        import os as _os
+        on_railway = bool(_os.environ.get('RAILWAY_ENVIRONMENT') or
+                          _os.environ.get('RAILWAY_SERVICE_NAME'))
         resp.set_cookie(
             'ap_session', sid,
             max_age=86400,   # 24 hours
             httponly=True,
             samesite='Strict',
+            secure=on_railway,
         )
         return resp
 

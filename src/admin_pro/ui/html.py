@@ -243,7 +243,7 @@ HTML_SECTIONS = """
       </div>
     </div>
     <div class="ap-card ap-status-card">
-      <div class="ap-card-header"><span class="ap-card-title">Calendar</span></div>
+      <div class="ap-card-header"><span class="ap-card-title">AI (Anthropic)</span></div>
       <div class="ap-status-indicator" id="status-calendar">
         <span class="ap-status-dot" id="status-calendar-dot"></span>
         <span id="status-calendar-text">Checking…</span>
