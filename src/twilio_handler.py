@@ -60,23 +60,27 @@ def send_sms(to, body):
         return None
 
 def send_owner_confirmation_request(pending_id, booking_data):
+    # Step 1: SMS to owner with YES/NO/edit prompt (if enabled)
     if not get_flag('flag_auto_sms_owner'):
-        logger.info(f"Auto SMS to owner disabled — skipping confirmation request for {pending_id}")
-        _send_calendar_invite_fallback(pending_id, booking_data, reason="SMS disabled")
-        return
-    msg = format_booking_for_owner(booking_data)
-    msg += f"\n\n[ID:{pending_id}]"
-    result = send_sms(os.environ['OWNER_MOBILE'], msg)
-    if result is None:
-        logger.warning(f"Owner SMS failed for booking {pending_id} — triggering calendar invite fallback")
-        _send_calendar_invite_fallback(pending_id, booking_data, reason="SMS delivery failed")
+        logger.info(f"Auto SMS to owner disabled — skipping SMS for {pending_id}")
+    else:
+        msg = format_booking_for_owner(booking_data)
+        msg += f"\n\n[ID:{pending_id}]"
+        result = send_sms(os.environ['OWNER_MOBILE'], msg)
+        if result is None:
+            logger.warning(f"Owner SMS failed for booking {pending_id}")
+
+    # Step 2: Always create a tentative calendar invite in parallel.
+    # Owner responds via SMS (YES/NO) OR any authorised worker accepts the invite —
+    # both paths confirm the booking independently.
+    _send_calendar_invite_fallback(pending_id, booking_data)
 
 
-def _send_calendar_invite_fallback(pending_id, booking_data, reason="SMS unavailable"):
+def _send_calendar_invite_fallback(pending_id, booking_data, reason="parallel confirmation"):
     """
-    Fallback when owner SMS cannot be sent.
-    Creates a Google Calendar event with OWNER_EMAIL as attendee — Google sends
-    a native accept/decline/amend invite email. RSVP is detected by the scheduler.
+    Create a tentative Google Calendar event with OWNER_EMAIL as attendee.
+    Google sends a native accept/decline invite email. RSVP is detected by the scheduler.
+    Called both as primary confirmation path and as SMS fallback.
     """
     state = StateManager()
     owner_email = os.environ.get('OWNER_EMAIL', '')
