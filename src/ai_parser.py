@@ -387,22 +387,20 @@ def format_availability_response(
     # Strip any date/day/preferred-date items — the intro sentence already asks
     # the customer to state their preferred day, so listing it again is redundant.
     _date_related = re.compile(r'\b(date|day|preferred|available|availab)\b', re.I)
-    fields = [
-        f for f in (missing_fields or [
-            'Your full name',
-            'Your phone number',
-            'Your suburb or service address',
-            'Vehicle make, year and model (e.g. 2019 Toyota Camry)',
-            'Description of the damage or repair needed (e.g. kerb rash on front-left rim)',
-        ])
-        if not _date_related.search(f)
-    ] or [
+    _default_fields = [
         'Your full name',
         'Your phone number',
         'Your suburb or service address',
         'Vehicle make, year and model (e.g. 2019 Toyota Camry)',
         'Description of the damage or repair needed (e.g. kerb rash on front-left rim)',
     ]
+    if missing_fields is None:
+        # No extraction ran — ask for everything
+        fields = _default_fields
+    else:
+        # Extraction ran — only list fields still genuinely missing, excluding date
+        # (date is handled by the "reply with your preferred day" sentence above)
+        fields = [f for f in missing_fields if not _date_related.search(f)]
     fields_html = ''.join(
         f'<li style="margin-bottom:6px;color:{DARK};font-size:14px;">{f}</li>'
         for f in fields
