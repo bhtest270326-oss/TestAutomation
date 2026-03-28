@@ -937,7 +937,10 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
         # then fall through so the booking details are still extracted and processed.
         logger.info(f"Mixed intent (booking + question) from {customer_email} on thread {thread_id} — drafting answer and continuing booking flow")
         try:
-            draft_html = draft_off_scope_reply(body, first_name, existing_missing, original_data)
+            # Pass empty missing_fields — the current message is providing booking details
+            # so we don't know yet what's still missing. The booking flow below will handle
+            # any remaining fields. The draft should only answer the embedded question.
+            draft_html = draft_off_scope_reply(body, first_name, [], original_data)
             from email_utils import create_gmail_draft
             draft_id = create_gmail_draft(service, customer_email, reply_subject, draft_html, thread_id=thread_id)
             if draft_id:
