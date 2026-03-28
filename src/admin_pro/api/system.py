@@ -1,0 +1,221 @@
+"""
+admin_pro/api/system.py — System health, flags, DB stats, app state, and day cancellation.
+"""
+
+import os
+import sqlite3
+import logging
+
+from flask import jsonify, request
+
+logger = logging.getLogger(__name__)
+
+# Resolve the SQLite DB path using the same logic as state_manager.py
+_STATE_FILE_JSON = os.environ.get('STATE_FILE', '/data/booking_state.json')
+DB_PATH = os.path.splitext(_STATE_FILE_JSON)[0] + '.db'
+
+
+def register(bp, require_auth):
+
+    # ------------------------------------------------------------------
+    # GET /api/system/health
+    # ------------------------------------------------------------------
+
+    @bp.route('/api/system/health', methods=['GET'])
+    @require_auth
+    def system_health():
+        result = {}
+
+        # --- DB check ---
+        try:
+            size_mb = round(os.path.getsize(DB_PATH) / (1024 * 1024), 3) if os.path.exists(DB_PATH) else 0.0
+            conn = sqlite3.connect(DB_PATH, timeout=5)
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT COUNT(*) FROM bookings").fetchone()
+            bookings_count = row[0] if row else 0
+            conn.close()
+            db_status = {'status': 'ok', 'size_mb': size_mb, 'bookings_count': bookings_count}
+        except Exception as e:
+            logger.warning('DB health check failed: %s', e)
+            db_status = {'status': 'error', 'size_mb': 0.0, 'bookings_count': 0}
+
+        result['db'] = db_status
+
+        # --- Gmail check ---
+        try:
+            refresh_token = os.environ.get('GOOGLE_REFRESH_TOKEN', '')
+            if not refresh_token:
+                gmail_status = {'status': 'unconfigured', 'last_poll': None}
+            else:
+                conn = sqlite3.connect(DB_PATH, timeout=5)
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    "SELECT value FROM app_state WHERE key='last_gmail_poll_at'"
+                ).fetchone()
+                conn.close()
+                last_poll = row['value'] if row else None
+                gmail_status = {'status': 'ok', 'last_poll': last_poll}
+        except Exception as e:
+            logger.warning('Gmail health check failed: %s', e)
+            gmail_status = {'status': 'error', 'last_poll': None}
+
+        result['gmail'] = gmail_status
+
+        # --- Anthropic check ---
+        result['anthropic'] = {
+            'status': 'configured' if os.environ.get('ANTHROPIC_API_KEY') else 'unconfigured'
+        }
+
+        # --- Twilio check ---
+        result['twilio'] = {
+            'status': 'configured' if os.environ.get('TWILIO_ACCOUNT_SID') else 'unconfigured'
+        }
+
+        # --- Uptime / mode info ---
+        pubsub_mode = bool(os.environ.get('PUBSUB_TOPIC_NAME', ''))
+        result['uptime_info'] = {'pubsub_mode': pubsub_mode}
+
+        result['status'] = 'ok'
+        return jsonify(result)
+
+    # ------------------------------------------------------------------
+    # GET /api/system/flags
+    # ------------------------------------------------------------------
+
+    @bp.route('/api/system/flags', methods=['GET'])
+    @require_auth
+    def get_flags():
+        try:
+            from feature_flags import get_all_flags
+            return jsonify({'flags': get_all_flags()})
+        except Exception as e:
+            logger.exception('get_flags error')
+            return jsonify({'ok': False, 'error': str(e)}), 500
+
+    # ------------------------------------------------------------------
+    # POST /api/system/flags/<key>
+    # ------------------------------------------------------------------
+
+    @bp.route('/api/system/flags/<key>', methods=['POST'])
+    @require_auth
+    def set_flag_route(key):
+        try:
+            from feature_flags import set_flag, FLAGS
+            if key not in FLAGS:
+                return jsonify({'ok': False, 'error': f'Unknown flag: {key}'}), 400
+            body = request.get_json(force=True, silent=True) or {}
+            enabled = bool(body.get('enabled', True))
+            set_flag(key, enabled)
+            return jsonify({'ok': True, 'key': key, 'enabled': enabled})
+        except Exception as e:
+            logger.exception('set_flag error')
+            return jsonify({'ok': False, 'error': str(e)}), 500
+
+    # ------------------------------------------------------------------
+    # GET /api/system/db-stats
+    # ------------------------------------------------------------------
+
+    @bp.route('/api/system/db-stats', methods=['GET'])
+    @require_auth
+    def db_stats():
+        try:
+            conn = sqlite3.connect(DB_PATH, timeout=5)
+            tables_rows = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            ).fetchall()
+            tables = []
+            total_rows = 0
+            for (name,) in tables_rows:
+                try:
+                    count_row = conn.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()
+                    count = count_row[0] if count_row else 0
+                except Exception:
+                    count = 0
+                tables.append({'name': name, 'count': count})
+                total_rows += count
+            conn.close()
+            return jsonify({'tables': tables, 'total_rows': total_rows})
+        except Exception as e:
+            logger.exception('db_stats error')
+            return jsonify({'ok': False, 'error': str(e)}), 500
+
+    # ------------------------------------------------------------------
+    # POST /api/system/cancel-day
+    # ------------------------------------------------------------------
+
+    @bp.route('/api/system/cancel-day', methods=['POST'])
+    @require_auth
+    def cancel_day():
+        try:
+            body = request.get_json(force=True, silent=True) or {}
+            date = body.get('date', '').strip()
+            reason = body.get('reason', '').strip()
+            if not date:
+                return jsonify({'ok': False, 'error': 'date is required'}), 400
+            from state_manager import StateManager
+            state = StateManager()
+            cancelled = state.cancel_all_bookings_for_date(date, reason, 'owner_ui')
+            return jsonify({'ok': True, 'cancelled': len(cancelled), 'booking_ids': cancelled})
+        except Exception as e:
+            logger.exception('cancel_day error')
+            return jsonify({'ok': False, 'error': str(e)}), 500
+
+    # ------------------------------------------------------------------
+    # GET /api/system/app-state
+    # ------------------------------------------------------------------
+
+    @bp.route('/api/system/app-state', methods=['GET'])
+    @require_auth
+    def get_app_state_all():
+        try:
+            conn = sqlite3.connect(DB_PATH, timeout=5)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute('SELECT key, value FROM app_state ORDER BY key').fetchall()
+            conn.close()
+            state = {row['key']: row['value'] for row in rows}
+            return jsonify({'state': state})
+        except Exception as e:
+            logger.exception('get_app_state error')
+            return jsonify({'ok': False, 'error': str(e)}), 500
+
+    # ------------------------------------------------------------------
+    # POST /api/system/app-state/<key>
+    # ------------------------------------------------------------------
+
+    @bp.route('/api/system/app-state/<key>', methods=['POST'])
+    @require_auth
+    def set_app_state_route(key):
+        try:
+            body = request.get_json(force=True, silent=True) or {}
+            value = body.get('value', '')
+            from state_manager import StateManager
+            StateManager().set_app_state(key, value)
+            return jsonify({'ok': True, 'key': key, 'value': value})
+        except Exception as e:
+            logger.exception('set_app_state error')
+            return jsonify({'ok': False, 'error': str(e)}), 500
+
+    # ------------------------------------------------------------------
+    # GET /api/system/waitlist
+    # ------------------------------------------------------------------
+
+    @bp.route('/api/system/waitlist', methods=['GET'])
+    @require_auth
+    def get_waitlist():
+        try:
+            conn = sqlite3.connect(DB_PATH, timeout=5)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                'SELECT * FROM waitlist ORDER BY created_at DESC'
+            ).fetchall()
+            conn.close()
+            entries = [dict(row) for row in rows]
+            return jsonify({'waitlist': entries, 'total': len(entries)})
+        except Exception as e:
+            logger.exception('get_waitlist error')
+            return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
+from admin_pro import admin_pro_bp, require_auth  # noqa: E402
+register(admin_pro_bp, require_auth)

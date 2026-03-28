@@ -26,6 +26,9 @@ def create_app():
     from admin_ui import admin_bp
     app.register_blueprint(admin_bp)
 
+    from admin_pro import admin_pro_bp
+    app.register_blueprint(admin_pro_bp)
+
     # ------------------------------------------------------------------
     # Static assets (banner image etc.)
     # ------------------------------------------------------------------
