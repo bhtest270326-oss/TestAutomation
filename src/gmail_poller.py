@@ -883,20 +883,12 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
     still_missing = []
     if not merged_data.get('customer_name'):
         still_missing.append('Your full name')
-    if not merged_data.get('customer_phone'):
+    if not merged_data.get('customer_phone') and not customer_email:
         still_missing.append('Your phone number')
     if not address_present:
         still_missing.append('Your suburb or service address')
     if not merged_data.get('preferred_date'):
         still_missing.append('Your preferred date')
-    if not merged_data.get('vehicle_make'):
-        still_missing.append('The make of your vehicle (e.g. Toyota, BMW)')
-    if not merged_data.get('vehicle_year'):
-        still_missing.append('The year of your vehicle')
-    if not merged_data.get('vehicle_model'):
-        still_missing.append('The model of your vehicle (e.g. Camry, 3 Series)')
-    if not merged_data.get('damage_description'):
-        still_missing.append('A description of the damage or type of repair needed')
 
     if still_missing:
         # Before looping with another clarification, check if the customer is
