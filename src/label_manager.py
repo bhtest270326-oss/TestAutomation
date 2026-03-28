@@ -26,6 +26,10 @@ LABELS = {
         'color': {'backgroundColor': '#999999', 'textColor': '#ffffff'},  # Grey - catch-all processed
         'description': 'Email has been processed by the booking system'
     },
+    'Assistance Required': {
+        'color': {'backgroundColor': '#4a86e8', 'textColor': '#ffffff'},  # Blue - owner attention needed
+        'description': 'Customer asked an off-scope question — draft reply created for owner review'
+    },
 }
 
 _label_cache = {}
@@ -148,3 +152,9 @@ def label_processed(service, msg_id):
     """Grey — processed, no action needed."""
     apply_label(service, msg_id, 'Processed',
                 remove_labels=['Pending Reply', 'Awaiting Confirmation', 'Confirmed', 'Declined'])
+
+
+def label_assistance_required(service, msg_id):
+    """Blue — customer asked an off-scope question; a draft reply has been created for owner review."""
+    apply_label(service, msg_id, 'Assistance Required',
+                remove_labels=['Pending Reply', 'Awaiting Confirmation', 'Confirmed', 'Declined', 'Processed'])

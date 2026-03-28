@@ -207,3 +207,33 @@ def verify_reschedule_token(token: str) -> str | None:
         return booking_id
     except Exception:
         return None
+
+
+def create_gmail_draft(service, to_email: str, subject: str, html_body: str, thread_id: str = None) -> str | None:
+    """Create a Gmail draft in the Drafts folder. Does NOT send.
+
+    Used for off-scope customer questions — owner reviews and sends manually.
+
+    Returns:
+        Draft ID string on success, None on failure.
+    """
+    try:
+        full_html = build_email_html(html_body)
+
+        msg = MIMEMultipart('alternative')
+        msg['to'] = to_email
+        msg['subject'] = subject
+        msg.attach(MIMEText(full_html, 'html'))
+
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        body: dict = {'message': {'raw': raw}}
+        if thread_id:
+            body['message']['threadId'] = thread_id
+
+        draft = service.users().drafts().create(userId='me', body=body).execute()
+        draft_id = draft.get('id')
+        logger.info(f"Gmail draft created: {draft_id} (to: {to_email}, thread: {thread_id})")
+        return draft_id
+    except Exception as e:
+        logger.error(f"create_gmail_draft error (to: {to_email}): {e}")
+        return None

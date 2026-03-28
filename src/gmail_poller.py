@@ -866,6 +866,73 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
     """Customer replied with missing info — merge with existing partial booking."""
     original_data = existing_pending.get('booking_data', {})
 
+    # --- Intent Classification ---
+    # Before extracting booking details, classify whether this reply is a question
+    # rather than booking information. Questions must not consume clarification
+    # attempts or trigger another booking-details request.
+    existing_missing = existing_pending.get('missing_fields', [])
+    first_name = (original_data.get('customer_name') or 'there').split()[0]
+    reply_subject = subject if subject.lower().startswith('re:') else f'Re: {subject}'
+
+    try:
+        from ai_parser import classify_clarification_reply, generate_faq_response, draft_off_scope_reply
+        intent = classify_clarification_reply(body, subject)
+    except Exception as _ie:
+        logger.error(f"Intent classification failed: {_ie} — proceeding as booking_detail")
+        intent = 'booking_detail'
+
+    if intent == 'faq_question':
+        # Customer asked a FAQ-type question (pricing, area, hours, payment, etc.)
+        # Auto-answer it and re-ask missing fields, but do NOT consume an attempt.
+        logger.info(f"FAQ question detected from {customer_email} on thread {thread_id} — auto-answering")
+        try:
+            faq_html = generate_faq_response(body, first_name, existing_missing, original_data)
+            if get_flag('flag_auto_email_replies'):
+                from email_utils import send_customer_email
+                send_customer_email(service, customer_email, reply_subject, faq_html, thread_id=thread_id)
+                logger.info(f"FAQ auto-reply sent to {customer_email}")
+            else:
+                logger.info(f"Auto email replies disabled — FAQ reply not sent to {customer_email}")
+        except Exception as _fe:
+            logger.error(f"FAQ response error for {customer_email}: {_fe}")
+        try:
+            label_pending_reply(service, msg_id)
+        except Exception:
+            pass
+        state.mark_email_processed(msg_id)
+        return
+
+    elif intent == 'off_scope':
+        # Customer asked something outside our FAQ scope.
+        # Create a draft reply for owner review, label the email blue, do NOT send.
+        logger.info(f"Off-scope message from {customer_email} on thread {thread_id} — creating draft for owner review")
+        try:
+            draft_html = draft_off_scope_reply(body, first_name, existing_missing, original_data)
+            from email_utils import create_gmail_draft
+            draft_id = create_gmail_draft(service, customer_email, reply_subject, draft_html, thread_id=thread_id)
+            if draft_id:
+                logger.info(f"Off-scope draft {draft_id} created for {customer_email}")
+            else:
+                logger.warning(f"Draft creation returned None for {customer_email}")
+        except Exception as _de:
+            logger.error(f"Off-scope draft creation error for {customer_email}: {_de}")
+        try:
+            from label_manager import label_assistance_required
+            label_assistance_required(service, msg_id)
+        except Exception as _le:
+            logger.warning(f"Could not apply Assistance Required label: {_le}")
+        try:
+            state.log_booking_event(
+                existing_pending['id'], 'off_scope_question', actor='customer',
+                details={'message_snippet': body[:200], 'thread_id': thread_id}
+            )
+        except Exception:
+            pass
+        state.mark_email_processed(msg_id)
+        return
+
+    # --- intent == 'booking_detail' — proceed with normal extraction ---
+
     # Extract data from the reply only
     new_data, new_missing, _ = extract_booking_details(body, subject, customer_email)
 
