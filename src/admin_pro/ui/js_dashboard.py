@@ -231,7 +231,7 @@ function renderRecentBookings(bookings) {
     const bd          = b.booking_data || {};
     const name        = escHtml(bd.name || bd.customer_name || b.customer_email || 'Unknown');
     const service     = escHtml(bd.service_type
-      ? bd.service_type.replace(/_/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); })
+      ? bd.service_type.replace(/_/g, ' ').replace(/\\b\\w/g, function(c) { return c.toUpperCase(); })
       : 'Rim Repair');
     const date        = escHtml(b.preferred_date || bd.preferred_date || '—');
     const statusBadge = '<span class="ap-badge ap-badge-amber">Pending</span>';
@@ -283,7 +283,7 @@ function renderTodayJobs(bookings) {
     const name   = escHtml(bd.name || bd.customer_name || b.customer_email || 'Unknown');
     const suburb = escHtml(bd.suburb || bd.address_suburb || bd.location_suburb || '');
     const service = escHtml(bd.service_type
-      ? bd.service_type.replace(/_/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); })
+      ? bd.service_type.replace(/_/g, ' ').replace(/\\b\\w/g, function(c) { return c.toUpperCase(); })
       : 'Rim Repair');
 
     html += `

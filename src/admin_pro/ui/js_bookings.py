@@ -699,6 +699,59 @@ async function submitEditBooking(bookingId) {
   }
 }
 
+// ── HTML filter-bar compatibility shims ──────────────────────
+// The static HTML filter tabs call filterBookings(status) with
+// plain status names; map them to internal keys and delegate.
+function filterBookings(status) {
+  var statusMap = {
+    \'all\':       \'all\',
+    \'pending\':   \'awaiting_owner\',
+    \'confirmed\': \'confirmed\',
+    \'declined\':  \'declined\',
+    \'completed\': \'completed\',
+    \'cancelled\': \'cancelled\',
+    \'waitlist\':  \'waitlist\',
+  };
+  var mapped = statusMap[status] !== undefined ? statusMap[status] : status;
+  setBookingStatus(mapped);
+
+  // Sync the active class on the static HTML pills
+  var pills = document.querySelectorAll(\'#booking-status-pills .ap-pill\');
+  pills.forEach(function(btn) {
+    btn.classList.toggle(\'active\', btn.dataset.status === status);
+  });
+}
+
+function filterBookingsByDate() {
+  var from = document.getElementById(\'filter-date-from\');
+  var to   = document.getElementById(\'filter-date-to\');
+  BOOKINGS_STATE.dateFrom = from ? from.value : \'\';
+  BOOKINGS_STATE.dateTo   = to   ? to.value   : \'\';
+  BOOKINGS_STATE.page     = 1;
+  loadBookings();
+}
+
+function searchBookings(val) {
+  BOOKINGS_STATE.search = val || \'\';
+  BOOKINGS_STATE.page   = 1;
+  loadBookings();
+}
+
+function sortBookings(col) {
+  if (BOOKINGS_STATE.sortBy === col) {
+    BOOKINGS_STATE.sortDir = BOOKINGS_STATE.sortDir === \'asc\' ? \'desc\' : \'asc\';
+  } else {
+    BOOKINGS_STATE.sortBy  = col;
+    BOOKINGS_STATE.sortDir = \'asc\';
+  }
+  BOOKINGS_STATE.page = 1;
+  loadBookings();
+}
+
+function toggleSelectAll(checkbox) {
+  toggleSelectAllBookings(checkbox.checked);
+}
+
 // ── Add note ─────────────────────────────────────────────────
 async function addNote(bookingId) {
   const note = prompt(\'Add note to booking:\');

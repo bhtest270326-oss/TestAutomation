@@ -64,17 +64,23 @@ function serviceLabel(type) {
 }
 
 // ---------------------------------------------------------------------------
-// Trend week selector state
+// Trend period selector state  (period in days; HTML buttons call setTrendPeriod)
 // ---------------------------------------------------------------------------
-let _trendsWeeks = 8;
+let _trendDays = 30;
 
-function setTrendsWeeks(weeks) {
-  _trendsWeeks = weeks;
-  // Update active button highlight
-  document.querySelectorAll('.ap-trend-btn').forEach(btn => {
-    btn.classList.toggle('ap-btn-active', parseInt(btn.dataset.weeks, 10) === weeks || (weeks === 0 && btn.dataset.weeks === 'all'));
+function setTrendPeriod(days) {
+  _trendDays = days;
+  // Update active button highlight on the hardcoded ap-pill buttons in HTML
+  document.querySelectorAll('.ap-chart-controls .ap-pill').forEach(btn => {
+    const btnDays = parseInt(btn.textContent, 10);
+    btn.classList.toggle('active', btnDays === days);
   });
   loadTrendsChart();
+}
+
+// Keep the old name as an alias for compatibility
+function setTrendsWeeks(weeks) {
+  setTrendPeriod(weeks * 7);
 }
 
 // ---------------------------------------------------------------------------
@@ -85,12 +91,13 @@ async function loadAnalyticsOverview() {
     const data = await apiFetch('/v2/api/analytics/overview');
     const d = data;
 
-    const conversionEl = document.getElementById('ana-conversion');
+    // HTML value elements carry a -val suffix; the IDs without -val are the card wrappers
+    const conversionEl = document.getElementById('ana-conversion-val');
     if (conversionEl) {
       conversionEl.textContent = (d.conversion_rate ?? 0).toFixed(1) + '%';
     }
 
-    const avgConfirmEl = document.getElementById('ana-avg-confirm');
+    const avgConfirmEl = document.getElementById('ana-avg-confirm-val');
     if (avgConfirmEl) {
       const hours = d.avg_confirm_hours ?? 0;
       if (hours < 1) {
@@ -102,15 +109,14 @@ async function loadAnalyticsOverview() {
       }
     }
 
-    const weekEl = document.getElementById('ana-week');
+    const weekEl = document.getElementById('ana-week-val');
     if (weekEl) {
       weekEl.textContent = d.this_week_confirmed ?? 0;
     }
 
-    const revenueEl = document.getElementById('ana-revenue');
+    // ana-revenue is the card wrapper; ana-revenue-val holds the displayed number
+    const revenueEl = document.getElementById('ana-revenue-val');
     if (revenueEl) {
-      // Estimated revenue = confirmed * avg price; real breakdown comes from revenue endpoint
-      // Show confirmed count here; revenue card handles dollar value
       revenueEl.textContent = d.confirmed ?? 0;
     }
   } catch (err) {
@@ -123,14 +129,20 @@ async function loadAnalyticsOverview() {
 // ---------------------------------------------------------------------------
 async function loadTrendsChart() {
   try {
-    const weeksParam = _trendsWeeks > 0 ? _trendsWeeks : 52;
+    // Convert days to weeks for the API; minimum 1 week
+    const weeksParam = Math.max(1, Math.round(_trendDays / 7));
     const data = await apiFetch(`/v2/api/analytics/trends?weeks=${weeksParam}`);
     const d = data;
 
     destroyChart('trends');
 
-    const canvas = document.getElementById('chart-trends');
+    // HTML canvas ID is 'canvas-trend' (inside container 'chart-trend')
+    const canvas = document.getElementById('canvas-trend');
     if (!canvas) return;
+
+    // Hide placeholder once we have data
+    const placeholder = document.getElementById('trend-placeholder');
+    if (placeholder) placeholder.style.display = 'none';
 
     APP.charts['trends'] = new Chart(canvas, {
       type: 'line',
@@ -199,8 +211,13 @@ async function loadServicesChart() {
 
     destroyChart('services');
 
-    const canvas = document.getElementById('chart-services');
+    // HTML canvas ID is 'canvas-service' (inside container 'chart-service')
+    const canvas = document.getElementById('canvas-service');
     if (!canvas) return;
+
+    // Hide placeholder once we have data
+    const placeholder = document.getElementById('service-placeholder');
+    if (placeholder) placeholder.style.display = 'none';
 
     const palette = [
       CHART_COLORS.blue,
@@ -262,76 +279,40 @@ async function loadServicesChart() {
 }
 
 // ---------------------------------------------------------------------------
-// Conversion Funnel Horizontal Bar Chart
+// Conversion Funnel — populates the existing HTML funnel widget elements.
+// The HTML uses custom funnel steps (ap-funnel-step) not a canvas, so we
+// update the count spans and bar widths directly.
+// Stage order from the API: Emails Received → Booking Extracted → Sent to Owner → Confirmed
+// HTML step IDs:            funnel-enquiries, funnel-pending, funnel-confirmed, funnel-completed
 // ---------------------------------------------------------------------------
 async function loadFunnelChart() {
   try {
     const data = await apiFetch('/v2/api/analytics/funnel');
-    const stages = (data.stages || []).slice().reverse(); // bottom-to-top for horizontal bar
+    const stages = data.stages || [];
 
-    destroyChart('funnel');
+    // Map API stage labels to HTML element IDs and bar width percentages
+    // Use the top-of-funnel count as 100 % baseline
+    const topCount = stages.length ? (stages[0].count || 1) : 1;
 
-    const canvas = document.getElementById('chart-funnel');
-    if (!canvas) return;
-
-    const stageColors = [
-      CHART_COLORS.blue,
-      CHART_COLORS.teal,
-      CHART_COLORS.amber,
-      CHART_COLORS.green,
-      CHART_COLORS.purple,
+    const idMap = [
+      'funnel-enquiries',
+      'funnel-pending',
+      'funnel-confirmed',
+      'funnel-completed',
     ];
 
-    // Top of funnel for percentage calculation (first stage in original order = last after reverse)
-    const topCount = stages.length ? stages[stages.length - 1].count : 1;
+    stages.forEach((stage, i) => {
+      const stepId = idMap[i];
+      if (!stepId) return;
 
-    const labels   = stages.map(s => s.label);
-    const counts   = stages.map(s => s.count);
-    const bgColors = stages.map((_, i) => stageColors[i % stageColors.length]);
+      const countEl = document.getElementById(stepId + '-n');
+      if (countEl) countEl.textContent = stage.count.toLocaleString();
 
-    APP.charts['funnel'] = new Chart(canvas, {
-      type: 'bar',
-      data: {
-        labels,
-        datasets: [{
-          label: 'Count',
-          data: counts,
-          backgroundColor: bgColors,
-          borderColor: bgColors,
-          borderWidth: 1,
-          borderRadius: 4,
-          borderSkipped: false,
-        }],
-      },
-      options: {
-        indexAxis: 'y',
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            ...BASE_TOOLTIP,
-            callbacks: {
-              label: ctx => {
-                const count = ctx.parsed.x;
-                const pct   = topCount ? ((count / topCount) * 100).toFixed(1) : 0;
-                return ` ${count.toLocaleString()} (${pct}% of total)`;
-              },
-            },
-          },
-        },
-        scales: {
-          x: {
-            grid: GRID_STYLE,
-            ticks: TICK_STYLE,
-            beginAtZero: true,
-          },
-          y: {
-            grid: { display: false },
-            ticks: { ...TICK_STYLE, font: { size: 12 } },
-          },
-        },
-      },
+      const barEl = document.querySelector('#' + stepId + ' .ap-funnel-bar');
+      if (barEl) {
+        const pct = topCount ? Math.round((stage.count / topCount) * 100) : 0;
+        barEl.style.width = pct + '%';
+      }
     });
   } catch (err) {
     console.error('loadFunnelChart error:', err);
@@ -339,66 +320,39 @@ async function loadFunnelChart() {
 }
 
 // ---------------------------------------------------------------------------
-// Top Suburbs Horizontal Bar Chart
+// Top Suburbs — renders into the existing HTML suburbs-list widget.
+// The HTML uses an ap-suburbs-list div (no canvas), so we generate rows
+// with inline progress bars rather than a Chart.js chart.
 // ---------------------------------------------------------------------------
 async function loadSuburbsChart() {
   try {
     const data = await apiFetch('/v2/api/analytics/suburbs');
-    const suburbs = (data.suburbs || []).slice(0, 10).reverse(); // flip for horizontal bar readability
+    const suburbs = (data.suburbs || []).slice(0, 10);
 
-    destroyChart('suburbs');
+    const listEl = document.getElementById('suburbs-list');
+    if (!listEl) return;
 
-    const canvas = document.getElementById('chart-suburbs');
-    if (!canvas) return;
+    if (!suburbs.length) {
+      listEl.innerHTML = '<div class="ap-table-empty">No suburb data yet.</div>';
+      return;
+    }
 
-    const maxCount = suburbs.length ? Math.max(...suburbs.map(s => s.count)) : 1;
+    const maxCount = Math.max(...suburbs.map(s => s.count));
 
-    // Single-hue gradient: brightest bar = highest count
-    const bgColors = suburbs.map(s => {
-      const opacity = 0.35 + 0.65 * (s.count / maxCount);
-      return `rgba(59,130,246,${opacity.toFixed(2)})`;
-    });
-
-    APP.charts['suburbs'] = new Chart(canvas, {
-      type: 'bar',
-      data: {
-        labels: suburbs.map(s => s.name),
-        datasets: [{
-          label: 'Bookings',
-          data: suburbs.map(s => s.count),
-          backgroundColor: bgColors,
-          borderColor: CHART_COLORS.blue,
-          borderWidth: 1,
-          borderRadius: 4,
-          borderSkipped: false,
-        }],
-      },
-      options: {
-        indexAxis: 'y',
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            ...BASE_TOOLTIP,
-            callbacks: {
-              label: ctx => ` ${ctx.parsed.x} booking${ctx.parsed.x !== 1 ? 's' : ''}`,
-            },
-          },
-        },
-        scales: {
-          x: {
-            grid: GRID_STYLE,
-            ticks: { ...TICK_STYLE, stepSize: 1 },
-            beginAtZero: true,
-          },
-          y: {
-            grid: { display: false },
-            ticks: { ...TICK_STYLE, font: { size: 12 } },
-          },
-        },
-      },
-    });
+    listEl.innerHTML = suburbs.map(s => {
+      const pct = maxCount ? Math.round((s.count / maxCount) * 100) : 0;
+      return `
+        <div style="margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;margin-bottom:3px;font-size:13px">
+            <span>${s.name}</span>
+            <span style="color:var(--ap-text-muted)">${s.count} booking${s.count !== 1 ? 's' : ''}</span>
+          </div>
+          <div style="background:rgba(255,255,255,0.06);border-radius:3px;height:6px;width:100%">
+            <div style="background:${CHART_COLORS.blue};border-radius:3px;height:6px;width:${pct}%;transition:width 0.4s ease"></div>
+          </div>
+        </div>
+      `;
+    }).join('');
   } catch (err) {
     console.error('loadSuburbsChart error:', err);
   }
@@ -406,58 +360,61 @@ async function loadSuburbsChart() {
 
 // ---------------------------------------------------------------------------
 // Revenue Card
+// Populates:
+//   ana-revenue-val     — total estimated revenue (in the KPI card)
+//   revenue-breakdown   — per-service bars: rev-diamond / rev-powder / rev-repair
+// Service type mapping: rim_repair → rev-repair, paint_touchup → rev-powder,
+//                       multiple_rims → rev-diamond (closest match available)
 // ---------------------------------------------------------------------------
 async function loadRevenueCard() {
   try {
     const data = await apiFetch('/v2/api/analytics/revenue');
     const d = data;
 
-    const el = document.getElementById('ana-revenue-detail');
-    if (!el) return;
+    // Update the KPI card value
+    const revenueValEl = document.getElementById('ana-revenue-val');
+    if (revenueValEl) {
+      revenueValEl.textContent = '$' + (d.total_estimated || 0).toLocaleString();
+    }
 
-    const byServiceRows = (d.by_service || []).map(s => `
-      <div class="ap-flex ap-flex-between ap-mt-8">
-        <span>${serviceLabel(s.type)}</span>
-        <span class="ap-text-muted">$${(s.revenue || 0).toLocaleString()} (${s.count})</span>
-      </div>
-    `).join('');
+    // Map service types to the three HTML bar elements
+    const SERVICE_TO_BAR = {
+      'multiple_rims':  'diamond',  // highest-value tier → Diamond Cut slot
+      'rim_repair':     'repair',
+      'paint_touchup':  'powder',
+    };
 
-    el.innerHTML = `
-      <div class="ap-kpi-value" style="color:var(--ap-green)">$${(d.total_estimated || 0).toLocaleString()}</div>
-      <div class="ap-text-muted">Estimated (AUD)</div>
-      <div class="ap-mt-16">
-        ${byServiceRows || '<div class="ap-text-muted">No confirmed bookings yet.</div>'}
-      </div>
-    `;
+    const byService = d.by_service || [];
+    const maxRevenue = byService.length ? Math.max(...byService.map(s => s.revenue || 0)) : 1;
+
+    byService.forEach(s => {
+      const barKey = SERVICE_TO_BAR[s.type];
+      if (!barKey) return;
+
+      const barEl   = document.getElementById('rev-' + barKey);
+      const valEl   = document.getElementById('rev-' + barKey + '-val');
+      const pct     = maxRevenue ? Math.round(((s.revenue || 0) / maxRevenue) * 100) : 0;
+
+      if (barEl)  barEl.style.width = pct + '%';
+      if (valEl)  valEl.textContent = '$' + (s.revenue || 0).toLocaleString();
+    });
   } catch (err) {
     console.error('loadRevenueCard error:', err);
-    const el = document.getElementById('ana-revenue-detail');
-    if (el) el.innerHTML = '<div class="ap-text-muted">Could not load revenue data.</div>';
+    const revenueValEl = document.getElementById('ana-revenue-val');
+    if (revenueValEl) revenueValEl.textContent = 'Error';
   }
 }
 
 // ---------------------------------------------------------------------------
-// Date range filter buttons — rendered inline in the analytics HTML section
-// Call this after the analytics panel HTML is in the DOM
+// Trend period selector init — HTML already has hardcoded ap-pill buttons
+// calling setTrendPeriod(30) / setTrendPeriod(90). This function just syncs
+// the active state to the current _trendDays value.
 // ---------------------------------------------------------------------------
 function initTrendsWeekSelector() {
-  const container = document.getElementById('trends-week-selector');
-  if (!container) return;
-
-  const options = [
-    { label: '4w',  weeks: 4  },
-    { label: '8w',  weeks: 8  },
-    { label: '12w', weeks: 12 },
-    { label: 'All', weeks: 0  },
-  ];
-
-  container.innerHTML = options.map(opt => `
-    <button
-      class="ap-btn ap-btn-sm ap-trend-btn${opt.weeks === _trendsWeeks ? ' ap-btn-active' : ''}"
-      data-weeks="${opt.weeks === 0 ? 'all' : opt.weeks}"
-      onclick="setTrendsWeeks(${opt.weeks})"
-    >${opt.label}</button>
-  `).join('');
+  document.querySelectorAll('.ap-chart-controls .ap-pill').forEach(btn => {
+    const btnDays = parseInt(btn.textContent, 10);
+    btn.classList.toggle('active', btnDays === _trendDays);
+  });
 }
 
 // ---------------------------------------------------------------------------

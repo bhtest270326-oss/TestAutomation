@@ -45,7 +45,7 @@ async function loadGmailQueue() {
     if (badge) badge.textContent = msgs.length ? msgs.length : '';
 
     if (data.error) {
-      tbody.innerHTML = `<tr><td colspan="5" class="ap-table-empty ap-text-muted">Gmail unavailable: ${escapeHtml(data.error)}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="5" class="ap-table-empty ap-text-muted">${escapeHtml(data.error)}</td></tr>`;
       return;
     }
     if (msgs.length === 0) {

@@ -52,8 +52,8 @@ def register(bp, require_auth):
 
             return jsonify({"messages": messages, "error": None})
         except Exception:
-            logger.exception("comms_gmail error")
-            return jsonify({"messages": [], "error": "Failed to fetch Gmail messages"})
+            logger.exception("comms_gmail error detail")
+            return jsonify({"messages": [], "error": "Gmail unavailable"})
 
     # ------------------------------------------------------------------
     # GET /api/comms/dlq

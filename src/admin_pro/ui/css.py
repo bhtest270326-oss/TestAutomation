@@ -828,6 +828,7 @@ body.ap-body {
 
 .ap-table {
   width: 100%;
+  min-width: 700px;
   border-collapse: collapse;
   font-size: 13px;
 }
@@ -1263,12 +1264,18 @@ body.ap-body {
 
 /* --- Pipeline Visualization -------------------------------- */
 .ap-pipeline {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   padding: 16px 0;
+}
+
+.ap-pipeline-track {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0;
+  overflow-x: auto;
+  min-width: max-content;
 }
 
 .ap-pipeline-node {
@@ -1280,7 +1287,8 @@ body.ap-body {
   border: 1px solid var(--ap-border);
   border-radius: var(--ap-radius);
   padding: 14px 18px;
-  min-width: 90px;
+  min-width: 120px;
+  flex: 1;
   text-align: center;
   transition: border-color var(--ap-transition), transform var(--ap-transition),
               box-shadow var(--ap-transition);
@@ -1326,9 +1334,19 @@ body.ap-body {
 }
 
 .ap-pipeline-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
   width: 40px;
-  height: 24px;
   flex-shrink: 0;
+  font-size: 20px;
+  color: var(--ap-border-light);
+}
+
+.ap-pipeline-arrow-anim {
+  display: inline-block;
+  animation: ap-pulse 1.2s ease-in-out infinite;
 }
 
 .ap-pipeline-arrow line,
@@ -2501,10 +2519,13 @@ body.ap-body {
   .ap-user-badge span { display: none; }
 
   .ap-pipeline {
-    flex-wrap: wrap;
-    gap: 8px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
   }
-  .ap-pipeline-arrow { display: none; }
+  .ap-pipeline-track {
+    min-width: max-content;
+  }
+  .ap-pipeline-arrow { display: flex; }
 
   /* Calendar mobile */
   .ap-calendar-layout {
