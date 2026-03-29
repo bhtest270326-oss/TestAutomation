@@ -30,6 +30,7 @@ const SECTION_META = {
   system:    { title: 'System',          subtitle: 'Feature flags and system health' },
   activity:  { title: 'Activity Feed',   subtitle: 'Audit log and recent events' },
   waitlist:  { title: 'Waitlist',        subtitle: 'Manage waitlisted customers' },
+  'market-pricing': { title: 'Market Pricing', subtitle: 'Competitor prices and market position' },
 };
 
 // ── Section Init Map ─────────────────────────────────────────
@@ -43,6 +44,7 @@ const SECTION_INIT = {
   system:    () => typeof initSystem     === 'function' && initSystem(),
   activity:  () => typeof initActivity   === 'function' && initActivity(),
   waitlist:  () => typeof initWaitlist   === 'function' && initWaitlist(),
+  'market-pricing': () => typeof initMarketPricing === 'function' && initMarketPricing(),
 };
 
 // ── Section Navigation ───────────────────────────────────────
