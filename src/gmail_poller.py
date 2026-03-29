@@ -366,8 +366,14 @@ def register_gmail_watch():
         return None
 
 
+_watch_failure_alerted = False  # deduplicate within a single process lifetime
+
 def _alert_owner_watch_failure(detail: str) -> None:
     """SMS + email alert to owner when Gmail watch renewal fails (Fix M5)."""
+    global _watch_failure_alerted
+    if _watch_failure_alerted:
+        return
+    _watch_failure_alerted = True
     try:
         owner_phone = os.environ.get('OWNER_PHONE', '') or os.environ.get('OWNER_MOBILE', '')
         if owner_phone:
