@@ -6,11 +6,15 @@ Set railway_url in dashboard_config.json to pull live data from Railway instead.
 import os
 import sys
 import json
+import secrets
 import threading
 import webbrowser
 import time
 import logging
 from datetime import datetime, timedelta
+
+# Per-process CSRF token — protects mutating local endpoints from CSRF
+_CSRF_TOKEN = secrets.token_hex(16)
 
 # ── On Windows, redirect the default Linux DB path to a local folder ───────
 if sys.platform == 'win32':
@@ -54,6 +58,16 @@ def _railway_auth(cfg):
     return (username, password) if password else None
 
 
+def _railway_headers(token: str) -> dict:
+    """Return request headers for Railway API calls — token via header, not query string."""
+    return {'X-Admin-Token': token} if token else {}
+
+
+def _check_csrf() -> bool:
+    """Return True if the request carries the correct per-session CSRF token."""
+    return request.headers.get('X-CSRF-Token') == _CSRF_TOKEN
+
+
 # ── Data layer ──────────────────────────────────────────────────────────────
 def _booking_card(row_dict, bd):
     return {
@@ -63,7 +77,7 @@ def _booking_card(row_dict, bd):
         'time':       bd.get('preferred_time', '?'),
         'address':    bd.get('address') or bd.get('suburb', '?'),
         'service':    (bd.get('service_type') or 'rim_repair').replace('_', ' ').title(),
-        'rims':       bd.get('rim_count') or '?',
+        'rims':       bd.get('num_rims') or '?',
         'phone':      bd.get('customer_phone', ''),
         'email':      row_dict.get('customer_email', ''),
         'created':    (row_dict.get('created_at') or '')[:10],
@@ -114,8 +128,7 @@ def _local_data():
 def _railway_data(url, token, auth=None):
     try:
         import requests
-        qs = f'?token={token}' if token else ''
-        r  = requests.get(f'{url}/admin/api/data{qs}', auth=auth, timeout=8)
+        r = requests.get(f'{url}/admin/api/data', headers=_railway_headers(token), auth=auth, timeout=8)
         if r.status_code == 200:
             d = r.json()
             d['mode']  = 'Railway (live)'
@@ -518,15 +531,38 @@ input:checked+.slider:before{transform:translateX(21px);}
 </div><!-- /container -->
 
 <script>
+/* ─ Per-session CSRF token (injected server-side) ─ */
+const CSRF = '__CSRF_TOKEN__';
+
 /* ─ State ─ */
 let _setupVisible = false;
 
 /* ─ Helpers ─ */
+function esc(s) {
+  if (s === null || s === undefined) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/* Authenticated fetch — attaches CSRF token to every mutating request */
+function authFetch(url, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({'X-CSRF-Token': CSRF}, opts.headers || {});
+  return fetch(url, opts);
+}
+
 function fmtDate(d) {
   if (!d || d === '?') return '?';
   try {
-    const [,m,dd] = d.split('-');
-    return `${parseInt(dd)} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m-1]}`;
+    const [y,m,dd] = d.split('-');
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const curYear = new Date().getFullYear().toString();
+    const yearSuffix = y !== curYear ? ` ${y}` : '';
+    return `${parseInt(dd)} ${months[m-1]}${yearSuffix}`;
   } catch { return d; }
 }
 
@@ -560,7 +596,10 @@ function toggleSetup() {
       document.getElementById('inp-url').value      = cfg.railway_url    || '';
       document.getElementById('inp-token').value    = cfg.admin_token    || '';
       document.getElementById('inp-username').value = cfg.admin_username || 'admin';
-      document.getElementById('inp-password').value = cfg.admin_password || '';
+      // Never pre-fill password — show placeholder indicating whether one is saved
+      const pwdInput = document.getElementById('inp-password');
+      pwdInput.value       = '';
+      pwdInput.placeholder = cfg.admin_password_set ? 'Saved — enter to replace' : 'ADMIN_PASSWORD value';
     });
   }
 }
@@ -570,15 +609,17 @@ async function saveSetup() {
     railway_url:    document.getElementById('inp-url').value.trim().replace(/\/+$/,''),
     admin_token:    document.getElementById('inp-token').value.trim(),
     admin_username: document.getElementById('inp-username').value.trim() || 'admin',
-    admin_password: document.getElementById('inp-password').value.trim(),
   };
-  await fetch('/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  // Only send admin_password when the user explicitly typed a new value
+  const newPwd = document.getElementById('inp-password').value.trim();
+  if (newPwd) body.admin_password = newPwd;
+  await authFetch('/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
   toggleSetup();
   refreshAll();
 }
 
 async function clearSetup() {
-  await fetch('/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({railway_url:'',admin_token:'',admin_username:'admin',admin_password:''})});
+  await authFetch('/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({railway_url:'',admin_token:'',admin_username:'admin',admin_password:''})});
   toggleSetup();
   refreshAll();
 }
@@ -595,7 +636,7 @@ async function refreshAll() {
 
 /* ─ Flags ─ */
 async function toggleFlag(key) {
-  const r = await fetch('/toggle', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({key})});
+  const r = await authFetch('/toggle', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({key})});
   if (r.ok) {
     const j = await r.json();
     const inp = document.getElementById('inp-' + key);
@@ -623,42 +664,44 @@ function renderFlags(flags) {
 
 /* ─ Booking cards ─ */
 function bookingCard(b) {
-  const rims = b.rims && b.rims !== '?' ? ` &bull; ${b.rims} rim${b.rims != 1 ? 's' : ''}` : '';
+  const rims = b.rims && b.rims !== '?' ? ` &bull; ${esc(b.rims)} rim${b.rims != 1 ? 's' : ''}` : '';
   return `<div class="bcard">
-    <div class="bcard-top"><div class="bcard-name">${b.name}</div><div class="bcard-id">${b.id}</div></div>
+    <div class="bcard-top"><div class="bcard-name">${esc(b.name)}</div><div class="bcard-id">${esc(b.id)}</div></div>
     <div class="bcard-row">
-      <div class="bcard-item">&#128197; <span>${fmtDate(b.date)} at ${b.time}</span></div>
-      <div class="bcard-item">&#128205; <span>${b.address}</span></div>
+      <div class="bcard-item">&#128197; <span>${esc(fmtDate(b.date))} at ${esc(b.time)}</span></div>
+      <div class="bcard-item">&#128205; <span>${esc(b.address)}</span></div>
     </div>
     <div class="bcard-row">
-      <div class="bcard-item">&#128295; <span>${b.service}${rims}</span></div>
-      ${b.phone ? `<div class="bcard-item">&#128222; <span>${b.phone}</span></div>` : ''}
+      <div class="bcard-item">&#128295; <span>${esc(b.service)}${rims}</span></div>
+      ${b.phone ? `<div class="bcard-item">&#128222; <span>${esc(b.phone)}</span></div>` : ''}
     </div>
   </div>`;
 }
 
 function pendingBookingCard(b) {
-  const rims = b.rims && b.rims !== '?' ? ` &bull; ${b.rims} rim${b.rims != 1 ? 's' : ''}` : '';
+  const rims = b.rims && b.rims !== '?' ? ` &bull; ${esc(b.rims)} rim${b.rims != 1 ? 's' : ''}` : '';
+  const idSafe = esc(b.id);
   return `<div class="bcard">
-    <div class="bcard-top"><div class="bcard-name">${b.name}</div><div class="bcard-id">${b.id}</div></div>
+    <div class="bcard-top"><div class="bcard-name">${esc(b.name)}</div><div class="bcard-id">${idSafe}</div></div>
     <div class="bcard-row">
-      <div class="bcard-item">&#128197; <span>${fmtDate(b.date)} at ${b.time}</span></div>
-      <div class="bcard-item">&#128205; <span>${b.address}</span></div>
+      <div class="bcard-item">&#128197; <span>${esc(fmtDate(b.date))} at ${esc(b.time)}</span></div>
+      <div class="bcard-item">&#128205; <span>${esc(b.address)}</span></div>
     </div>
     <div class="bcard-row">
-      <div class="bcard-item">&#128295; <span>${b.service}${rims}</span></div>
-      ${b.phone ? `<div class="bcard-item">&#128222; <span>${b.phone}</span></div>` : ''}
+      <div class="bcard-item">&#128295; <span>${esc(b.service)}${rims}</span></div>
+      ${b.phone ? `<div class="bcard-item">&#128222; <span>${esc(b.phone)}</span></div>` : ''}
     </div>
     <div style="margin-top:10px;display:flex;gap:8px;">
-      <button onclick="confirmBooking('${b.id}')" style="background:#22c55e;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-weight:600;">&#10003; Confirm</button>
-      <button onclick="declineBooking('${b.id}')" style="background:#ef4444;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-weight:600;">&#10007; Decline</button>
+      <button onclick="confirmBooking(this)" data-id="${idSafe}" style="background:#22c55e;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-weight:600;">&#10003; Confirm</button>
+      <button onclick="declineBooking(this)" data-id="${idSafe}" style="background:#ef4444;color:#fff;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-weight:600;">&#10007; Decline</button>
     </div>
   </div>`;
 }
 
-function confirmBooking(id) {
+function confirmBooking(btn) {
+  const id = btn.dataset.id;
   if (!confirm('Confirm booking ' + id + '?')) return;
-  fetch('/api/booking/' + id + '/confirm', {method: 'POST'})
+  authFetch('/api/booking/' + encodeURIComponent(id) + '/confirm', {method: 'POST'})
     .then(function(r) { return r.json(); })
     .then(function(d) {
       if (d.ok) { alert('Booking ' + id + ' confirmed!'); refreshAll(); }
@@ -666,9 +709,10 @@ function confirmBooking(id) {
     });
 }
 
-function declineBooking(id) {
+function declineBooking(btn) {
+  const id = btn.dataset.id;
   if (!confirm('Decline booking ' + id + '?')) return;
-  fetch('/api/booking/' + id + '/decline', {method: 'POST'})
+  authFetch('/api/booking/' + encodeURIComponent(id) + '/decline', {method: 'POST'})
     .then(function(r) { return r.json(); })
     .then(function(d) {
       if (d.ok) { alert('Booking ' + id + ' declined.'); refreshAll(); }
@@ -742,11 +786,11 @@ function gmailRow(m) {
   const pill = m.booking_status && PILL_MAP[m.booking_status]
     ? `<span class="spill ${PILL_MAP[m.booking_status][0]}">${PILL_MAP[m.booking_status][1]}</span>` : '';
   return `<div class="gmail-row${m.is_unread ? ' unread' : ''}">
-    <div class="gmail-avatar">${name.charAt(0).toUpperCase()}</div>
+    <div class="gmail-avatar">${esc(name).charAt(0).toUpperCase()}</div>
     <div class="gmail-main">
-      <div class="gmail-from">${name}</div>
-      <div class="gmail-subject">${m.subject || '(no subject)'}</div>
-      <div class="gmail-snippet">${m.snippet || ''}</div>
+      <div class="gmail-from">${esc(name)}</div>
+      <div class="gmail-subject">${esc(m.subject || '(no subject)')}</div>
+      <div class="gmail-snippet">${esc(m.snippet || '')}</div>
     </div>
     <div class="gmail-right">
       <div class="gmail-time">${fmtGmailDate(m.date)}</div>
@@ -761,7 +805,7 @@ async function loadGmail() {
     const r = await fetch('/api/gmail');
     if (!r.ok) { list.innerHTML = '<div class="empty">Gmail unavailable — connect to Railway first</div>'; return; }
     const d = await r.json();
-    if (d.error) { list.innerHTML = `<div class="empty">Gmail: ${d.error}</div>`; return; }
+    if (d.error) { list.innerHTML = `<div class="empty">Gmail: ${esc(d.error)}</div>`; return; }
     const msgs = d.messages || [];
     document.getElementById('gmail-count').textContent = msgs.length;
     list.innerHTML = msgs.length ? msgs.map(gmailRow).join('') : '<div class="empty">Inbox is empty</div>';
@@ -809,7 +853,8 @@ setInterval(loadAnalytics, 300000);
 # ── Flask routes ────────────────────────────────────────────────────────────
 @app.route('/')
 def index():
-    return _HTML, 200, {'Content-Type': 'text/html; charset=utf-8'}
+    html = _HTML.replace('__CSRF_TOKEN__', _CSRF_TOKEN)
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 
 @app.route('/api/data')
@@ -826,8 +871,8 @@ def api_gmail():
         return jsonify({'messages': [], 'error': 'No Railway URL configured'})
     try:
         import requests as _req
-        qs = f'?token={token}' if token else ''
-        r  = _req.get(f'{url}/admin/api/gmail{qs}', auth=_railway_auth(cfg), timeout=12)
+        r = _req.get(f'{url}/admin/api/gmail', headers=_railway_headers(token),
+                     auth=_railway_auth(cfg), timeout=12)
         if r.status_code == 200:
             return jsonify(r.json())
         return jsonify({'messages': [], 'error': f'Railway returned {r.status_code}'})
@@ -837,14 +882,16 @@ def api_gmail():
 
 @app.route('/api/booking/<booking_id>/confirm', methods=['POST'])
 def api_confirm_booking(booking_id):
+    if not _check_csrf():
+        return jsonify({'error': 'Invalid or missing CSRF token'}), 403
     cfg   = _load_cfg()
     url   = cfg.get('railway_url', '').strip().rstrip('/')
     token = cfg.get('admin_token', '').strip()
     if url:
         try:
             import requests as _req
-            qs = f'?token={token}' if token else ''
-            r  = _req.post(f'{url}/admin/api/booking/{booking_id}/confirm{qs}', auth=_railway_auth(cfg), timeout=12)
+            r = _req.post(f'{url}/admin/api/booking/{booking_id}/confirm',
+                          headers=_railway_headers(token), auth=_railway_auth(cfg), timeout=12)
             if r.status_code == 200:
                 return jsonify(r.json())
             return jsonify({'error': f'Railway returned {r.status_code}'}), r.status_code
@@ -866,14 +913,16 @@ def api_confirm_booking(booking_id):
 
 @app.route('/api/booking/<booking_id>/decline', methods=['POST'])
 def api_decline_booking(booking_id):
+    if not _check_csrf():
+        return jsonify({'error': 'Invalid or missing CSRF token'}), 403
     cfg   = _load_cfg()
     url   = cfg.get('railway_url', '').strip().rstrip('/')
     token = cfg.get('admin_token', '').strip()
     if url:
         try:
             import requests as _req
-            qs = f'?token={token}' if token else ''
-            r  = _req.post(f'{url}/admin/api/booking/{booking_id}/decline{qs}', auth=_railway_auth(cfg), timeout=12)
+            r = _req.post(f'{url}/admin/api/booking/{booking_id}/decline',
+                          headers=_railway_headers(token), auth=_railway_auth(cfg), timeout=12)
             if r.status_code == 200:
                 return jsonify(r.json())
             return jsonify({'error': f'Railway returned {r.status_code}'}), r.status_code
@@ -895,15 +944,18 @@ def api_decline_booking(booking_id):
 
 @app.route('/api/booking/<booking_id>/notes', methods=['POST'])
 def api_booking_add_note(booking_id):
+    if not _check_csrf():
+        return jsonify({'error': 'Invalid or missing CSRF token'}), 403
     cfg   = _load_cfg()
     url   = cfg.get('railway_url', '').strip().rstrip('/')
     token = cfg.get('admin_token', '').strip()
     if url:
         try:
             import requests as _req
-            qs = f'?token={token}' if token else ''
-            r  = _req.post(f'{url}/admin/api/booking/{booking_id}/notes{qs}',
-                           json=request.get_json(silent=True) or {}, auth=_railway_auth(cfg), timeout=12)
+            hdrs = {**_railway_headers(token), 'Content-Type': 'application/json'}
+            r = _req.post(f'{url}/admin/api/booking/{booking_id}/notes',
+                          json=request.get_json(silent=True) or {},
+                          headers=hdrs, auth=_railway_auth(cfg), timeout=12)
             if r.status_code == 200:
                 return jsonify(r.json())
             return jsonify({'error': f'Railway returned {r.status_code}'}), r.status_code
@@ -925,15 +977,18 @@ def api_booking_add_note(booking_id):
 
 @app.route('/api/booking/<booking_id>/edit', methods=['POST'])
 def api_booking_edit(booking_id):
+    if not _check_csrf():
+        return jsonify({'error': 'Invalid or missing CSRF token'}), 403
     cfg   = _load_cfg()
     url   = cfg.get('railway_url', '').strip().rstrip('/')
     token = cfg.get('admin_token', '').strip()
     if url:
         try:
             import requests as _req
-            qs = f'?token={token}' if token else ''
-            r  = _req.post(f'{url}/admin/api/booking/{booking_id}/edit{qs}',
-                           json=request.get_json(silent=True) or {}, auth=_railway_auth(cfg), timeout=12)
+            hdrs = {**_railway_headers(token), 'Content-Type': 'application/json'}
+            r = _req.post(f'{url}/admin/api/booking/{booking_id}/edit',
+                          json=request.get_json(silent=True) or {},
+                          headers=hdrs, auth=_railway_auth(cfg), timeout=12)
             if r.status_code == 200:
                 return jsonify(r.json())
             return jsonify({'error': f'Railway returned {r.status_code}'}), r.status_code
@@ -959,10 +1014,12 @@ def api_booking_edit(booking_id):
                     changed[field] = data[field]
             if not changed:
                 return jsonify({'error': 'No valid fields provided'}), 400
+            # Update both the JSON blob AND the indexed preferred_date column
+            new_date = bd.get('preferred_date')
             with state._conn() as conn:
                 conn.execute(
-                    "UPDATE bookings SET booking_data=? WHERE id=?",
-                    (_json.dumps(bd), booking_id)
+                    "UPDATE bookings SET booking_data=?, preferred_date=? WHERE id=?",
+                    (_json.dumps(bd), new_date, booking_id)
                 )
             state.log_booking_event(booking_id, 'fields_edited', actor='owner_ui', details=changed)
             return jsonify({'ok': True, 'changed': changed})
@@ -972,15 +1029,18 @@ def api_booking_edit(booking_id):
 
 @app.route('/api/booking/<booking_id>/decline-with-reason', methods=['POST'])
 def api_booking_decline_with_reason(booking_id):
+    if not _check_csrf():
+        return jsonify({'error': 'Invalid or missing CSRF token'}), 403
     cfg   = _load_cfg()
     url   = cfg.get('railway_url', '').strip().rstrip('/')
     token = cfg.get('admin_token', '').strip()
     if url:
         try:
             import requests as _req
-            qs = f'?token={token}' if token else ''
-            r  = _req.post(f'{url}/admin/api/booking/{booking_id}/decline-with-reason{qs}',
-                           json=request.get_json(silent=True) or {}, auth=_railway_auth(cfg), timeout=12)
+            hdrs = {**_railway_headers(token), 'Content-Type': 'application/json'}
+            r = _req.post(f'{url}/admin/api/booking/{booking_id}/decline-with-reason',
+                          json=request.get_json(silent=True) or {},
+                          headers=hdrs, auth=_railway_auth(cfg), timeout=12)
             if r.status_code == 200:
                 return jsonify(r.json())
             return jsonify({'error': f'Railway returned {r.status_code}'}), r.status_code
@@ -990,9 +1050,9 @@ def api_booking_decline_with_reason(booking_id):
         try:
             from state_manager import StateManager
             import json as _json
-            data = request.get_json(silent=True) or {}
+            data   = request.get_json(silent=True) or {}
             reason = (data.get('reason') or 'No reason specified').strip()
-            state = StateManager()
+            state  = StateManager()
             pending = state.get_pending_booking(booking_id)
             if not pending:
                 return jsonify({'error': 'Pending booking not found'}), 404
@@ -1003,6 +1063,8 @@ def api_booking_decline_with_reason(booking_id):
             if isinstance(bd, str):
                 bd = _json.loads(bd)
             customer_phone = bd.get('customer_phone')
+            customer_email = pending.get('customer_email') or bd.get('customer_email')
+            thread_id      = pending.get('thread_id')
             from feature_flags import get_flag
             if customer_phone and get_flag('flag_auto_sms_customer'):
                 try:
@@ -1011,7 +1073,14 @@ def api_booking_decline_with_reason(booking_id):
                     send_sms(customer_phone,
                         f"Hi {name}, unfortunately we're unable to accommodate your booking request "
                         f"at this time. Please contact us if you'd like to discuss alternatives. - Wheel Doctor Team")
-                except Exception as e:
+                except Exception:
+                    pass
+            # Send decline email — consistent with the standard decline path
+            if customer_email and get_flag('flag_auto_email_customer'):
+                try:
+                    from twilio_handler import send_decline_email
+                    send_decline_email(customer_email, bd, thread_id=thread_id)
+                except Exception:
                     pass
             return jsonify({'ok': True})
         except Exception as e:
@@ -1026,8 +1095,8 @@ def api_analytics():
     if url:
         try:
             import requests as _req
-            qs = f'?token={token}' if token else ''
-            r  = _req.get(f'{url}/admin/api/analytics{qs}', auth=_railway_auth(cfg), timeout=12)
+            r = _req.get(f'{url}/admin/api/analytics', headers=_railway_headers(token),
+                         auth=_railway_auth(cfg), timeout=12)
             if r.status_code == 200:
                 return jsonify(r.json())
             return jsonify({'error': f'Railway returned {r.status_code}'}), r.status_code
@@ -1064,8 +1133,8 @@ def api_analytics():
             suburb_counts = {}
             for row in rows:
                 try:
-                    bd = _json.loads(row[0])
-                    suburb = bd.get('suburb') or bd.get('address', '').split(',')[0].strip()
+                    bd     = _json.loads(row[0])
+                    suburb = (bd.get('suburb') or '').strip()
                     if suburb:
                         suburb_counts[suburb] = suburb_counts.get(suburb, 0) + 1
                 except Exception:
@@ -1103,6 +1172,8 @@ def api_analytics():
 
 @app.route('/toggle', methods=['POST'])
 def toggle():
+    if not _check_csrf():
+        return jsonify({'success': False, 'error': 'Invalid or missing CSRF token'}), 403
     body = request.get_json(silent=True) or {}
     key  = body.get('key', '')
 
@@ -1111,13 +1182,11 @@ def toggle():
     token = cfg.get('admin_token', '').strip()
 
     if url:
-        # Forward toggle to Railway
         try:
             import requests as _req
-            qs = f'?token={token}' if token else ''
-            # Use the JSON toggle API on Railway
-            r = _req.post(f'{url}/admin/api/toggle{qs}',
-                          json={'key': key}, auth=_railway_auth(cfg), timeout=8)
+            hdrs = {**_railway_headers(token), 'Content-Type': 'application/json'}
+            r = _req.post(f'{url}/admin/api/toggle', json={'key': key},
+                          headers=hdrs, auth=_railway_auth(cfg), timeout=8)
             if r.status_code == 200:
                 return jsonify(r.json())
             return jsonify({'success': False, 'error': f'Railway {r.status_code}'}), 502
@@ -1136,15 +1205,25 @@ def toggle():
 @app.route('/config', methods=['GET', 'POST'])
 def config():
     if request.method == 'POST':
-        body = request.get_json(silent=True) or {}
+        body    = request.get_json(silent=True) or {}
+        current = _load_cfg()
+        # Only overwrite password when the caller explicitly provides a new one
+        new_pwd = body.get('admin_password', '').strip()
         _save_cfg({
-            'railway_url':      body.get('railway_url', ''),
-            'admin_token':      body.get('admin_token', ''),
-            'admin_username':   body.get('admin_username', 'admin'),
-            'admin_password':   body.get('admin_password', ''),
+            'railway_url':    body.get('railway_url', ''),
+            'admin_token':    body.get('admin_token', ''),
+            'admin_username': body.get('admin_username', 'admin'),
+            'admin_password': new_pwd if new_pwd else current.get('admin_password', ''),
         })
         return jsonify({'ok': True})
-    return jsonify(_load_cfg())
+    # GET — never return the plaintext password; expose only whether one is saved
+    cfg = _load_cfg()
+    return jsonify({
+        'railway_url':       cfg.get('railway_url', ''),
+        'admin_token':       cfg.get('admin_token', ''),
+        'admin_username':    cfg.get('admin_username', 'admin'),
+        'admin_password_set': bool(cfg.get('admin_password', '').strip()),
+    })
 
 
 # ── Launch ──────────────────────────────────────────────────────────────────

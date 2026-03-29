@@ -71,7 +71,11 @@ def _require_admin_auth(f):
 def _authorised() -> bool:
     if not ADMIN_TOKEN:
         return True
-    tok = request.args.get('token') or request.form.get('token', '')
+    tok = (
+        request.headers.get('X-Admin-Token') or
+        request.args.get('token') or
+        request.form.get('token', '')
+    )
     return hmac.compare_digest(tok, ADMIN_TOKEN)
 
 
