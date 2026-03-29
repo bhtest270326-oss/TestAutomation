@@ -241,12 +241,12 @@ function renderRecentBookings(bookings) {
     const id          = escHtml(b.id || '');
 
     rows += `
-      <tr>
+      <tr style="cursor:pointer" onclick="openBookingDetail('${id}')">
         <td>${name}</td>
         <td>${service}</td>
         <td>${date}</td>
         <td>${statusBadge}</td>
-        <td class="ap-table-actions" style="white-space:nowrap">
+        <td class="ap-table-actions" style="white-space:nowrap" onclick="event.stopPropagation()">
           <button class="ap-btn ap-btn-sm ap-btn-success"
                   onclick="confirmBooking('${id}')">Confirm</button>
           <button class="ap-btn ap-btn-sm ap-btn-danger"
