@@ -71,6 +71,7 @@ async function loadCalendarData() {
   var fetches = [
     apiFetch('/v2/api/bookings?status=confirmed&date_from=' + dateFrom + '&date_to=' + dateTo + '&per_page=200'),
     apiFetch('/v2/api/bookings?status=awaiting_owner&date_from=' + dateFrom + '&date_to=' + dateTo + '&per_page=200'),
+    apiFetch('/v2/api/bookings?status=awaiting_owner&per_page=200'),
   ];
 
   var results = await Promise.allSettled(fetches);
@@ -89,6 +90,115 @@ async function loadCalendarData() {
         }
       });
     }
+  });
+
+  // Third fetch: all pending bookings (for the panel, may include ones outside this week)
+  if (results[2] && results[2].status === 'fulfilled') {
+    (results[2].value.bookings || []).forEach(function(b) {
+      // Add to flat list if not already there
+      var exists = CAL_STATE.bookings.some(function(existing) { return existing.id === b.id; });
+      if (!exists) {
+        CAL_STATE.bookings.push(b);
+      }
+    });
+  }
+
+  // Render pending panel with awaiting_owner bookings from all dates
+  _calRenderPendingPanel();
+}
+
+// ── Pending Confirmation Panel ─────────────────────────────
+function _calRenderPendingPanel() {
+  var listEl = document.getElementById('ap-pending-list');
+  var countEl = document.getElementById('pending-count');
+  if (!listEl) return;
+
+  // Collect all awaiting_owner bookings across all dates
+  var pending = [];
+  CAL_STATE.bookings.forEach(function(b) {
+    if (b.status === 'awaiting_owner') pending.push(b);
+  });
+
+  if (countEl) countEl.textContent = pending.length;
+
+  if (pending.length === 0) {
+    listEl.innerHTML = '<div class="ap-text-muted" style="padding:16px;text-align:center;font-size:13px">No bookings awaiting confirmation</div>';
+    return;
+  }
+
+  // Sort by preferred_date then time
+  pending.sort(function(a, b) {
+    var dA = a.preferred_date || '';
+    var dB = b.preferred_date || '';
+    if (dA !== dB) return dA.localeCompare(dB);
+    var tA = (a.booking_data && a.booking_data.preferred_time) || '';
+    var tB = (b.booking_data && b.booking_data.preferred_time) || '';
+    return tA.localeCompare(tB);
+  });
+
+  var html = '';
+  pending.forEach(function(b) {
+    var bd = b.booking_data || {};
+    var name = escapeHtml(bd.customer_name || bd.name || 'Unknown');
+    var date = b.preferred_date ? formatDate(b.preferred_date) : 'No date';
+    var time = escapeHtml(bd.preferred_time || 'TBD');
+    var service = serviceLabel(bd.service_type);
+    var suburb = escapeHtml(bd.suburb || bd.address_suburb || '');
+
+    html += '<div class="ap-pending-card" draggable="true" ';
+    html += 'data-booking-id="' + b.id + '" ';
+    html += 'ondragstart="calPendingDragStart(event, \\'' + b.id + '\\')" ';
+    html += 'ondragend="calPendingDragEnd(event)" ';
+    html += 'onclick="openBookingDetail(\\'' + b.id + '\\')">';
+    html += '<div class="pending-name">' + name + '</div>';
+    html += '<div class="pending-meta">';
+    html += '<span>' + date + ' at ' + time + '</span>';
+    html += '<span>' + service + (suburb ? ' · ' + suburb : '') + '</span>';
+    html += '</div>';
+    html += '<div class="pending-actions" onclick="event.stopPropagation()">';
+    html += '<button class="ap-btn ap-btn-success ap-btn-sm" onclick="event.stopPropagation();calConfirmBooking(\\'' + b.id + '\\')">Confirm</button>';
+    html += '<button class="ap-btn ap-btn-danger ap-btn-sm" onclick="event.stopPropagation();calDeclineBooking(\\'' + b.id + '\\')">Decline</button>';
+    html += '</div>';
+    html += '</div>';
+  });
+
+  listEl.innerHTML = html;
+}
+
+function calPendingDragStart(event, bookingId) {
+  // Find the booking to get its current date/time
+  var booking = null;
+  CAL_STATE.bookings.forEach(function(b) {
+    if (b.id === bookingId) booking = b;
+  });
+  var origDate = booking ? (booking.preferred_date || '') : '';
+  var origTime = (booking && booking.booking_data) ? (booking.booking_data.preferred_time || '') : '';
+
+  CAL_STATE.dragData = {
+    bookingId: bookingId,
+    originalDate: origDate,
+    originalTime: origTime,
+    fromPending: true,
+  };
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', bookingId);
+
+  var card = event.target.closest('.ap-pending-card');
+  if (card) {
+    setTimeout(function() { card.classList.add('dragging'); }, 0);
+  }
+}
+
+function calPendingDragEnd(event) {
+  CAL_STATE.dragData = null;
+  document.querySelectorAll('.ap-pending-card.dragging').forEach(function(el) {
+    el.classList.remove('dragging');
+  });
+  document.querySelectorAll('.cal-drop-indicator').forEach(function(el) {
+    el.remove();
+  });
+  document.querySelectorAll('.cal-day-body').forEach(function(el) {
+    el.classList.remove('cal-drag-over');
   });
 }
 
@@ -397,8 +507,12 @@ function calDragStart(event, bookingId, dateStr, timeStr) {
 
 function calDragEnd(event) {
   CAL_STATE.dragData = null;
+  // Remove dragging class from all cards (calendar + pending panel)
   document.querySelectorAll('.cal-card-dragging').forEach(function(el) {
     el.classList.remove('cal-card-dragging');
+  });
+  document.querySelectorAll('.ap-pending-card.dragging').forEach(function(el) {
+    el.classList.remove('dragging');
   });
   document.querySelectorAll('.cal-drop-indicator').forEach(function(el) {
     el.remove();

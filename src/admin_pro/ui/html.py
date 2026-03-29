@@ -408,25 +408,22 @@ HTML_SECTIONS = """
 </section>
 
 <!-- ═══════════════════════════════════════════════ CALENDAR ══ -->
-<section class="ap-section" id="section-calendar">
-  <div class="ap-calendar-layout">
-    <div class="ap-calendar-main">
+<section class="ap-section" id="section-calendar" style="height:calc(100vh - var(--ap-topbar-height, 56px) - 32px);display:flex;flex-direction:column;">
+  <div class="ap-calendar-layout" style="flex:1;min-height:0;">
+    <div class="ap-calendar-main" style="overflow:auto;">
       <div id="ap-calendar-header"></div>
       <div id="ap-calendar-grid">
         <div class="ap-calendar-loading">Loading calendar…</div>
       </div>
     </div>
 
-    <div class="ap-day-detail-panel" id="ap-day-detail">
-      <div class="ap-day-detail-header">
-        <span class="ap-card-title" id="day-detail-title">Select a day</span>
-        <span class="ap-card-badge" id="day-detail-count"></span>
+    <div class="ap-calendar-pending-panel" id="ap-pending-panel">
+      <div class="ap-pending-header">
+        <span class="ap-card-title">Pending Confirmation</span>
+        <span class="ap-badge ap-badge-amber" id="pending-count">0</span>
       </div>
-      <div class="ap-day-jobs-list" id="day-jobs-list">
-        <div class="ap-today-empty">Click a day header to see jobs.</div>
-      </div>
-      <div class="ap-day-detail-actions" id="day-detail-actions" style="display:none">
-        <button class="ap-btn ap-btn-sm ap-btn-danger" onclick="showCancelDayForm()">Cancel All Jobs This Day</button>
+      <div class="ap-pending-list" id="ap-pending-list">
+        <div class="ap-text-muted" style="padding:16px;text-align:center;font-size:13px">Loading…</div>
       </div>
     </div>
   </div>

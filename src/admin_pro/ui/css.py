@@ -2197,7 +2197,9 @@ body.ap-body {
   display: grid;
   grid-template-columns: 1fr 280px;
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
+  height: 100%;
+  min-height: 0;
 }
 
 .ap-calendar-main {
@@ -2668,6 +2670,92 @@ body.ap-body {
   }
   .ap-week-booking .booking-service {
     display: none;
+  }
+}
+
+/* Pending confirmation panel (right side of calendar) */
+.ap-calendar-pending-panel {
+  background: var(--ap-card);
+  border: 1px solid var(--ap-border);
+  border-radius: var(--ap-radius);
+  box-shadow: var(--ap-shadow);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ap-pending-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--ap-border);
+  flex-shrink: 0;
+}
+
+.ap-pending-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.ap-pending-card {
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-left: 3px solid var(--ap-amber);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  cursor: grab;
+  transition: box-shadow 0.15s, transform 0.15s, opacity 0.2s;
+  font-size: 13px;
+}
+
+.ap-pending-card:hover {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  transform: translateY(-1px);
+}
+
+.ap-pending-card:active {
+  cursor: grabbing;
+}
+
+.ap-pending-card.dragging {
+  opacity: 0.4;
+  transform: scale(0.95);
+}
+
+.ap-pending-card .pending-name {
+  font-weight: 600;
+  color: var(--ap-text);
+  margin-bottom: 2px;
+}
+
+.ap-pending-card .pending-meta {
+  color: var(--ap-text-muted);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ap-pending-card .pending-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.ap-pending-card .pending-actions button {
+  flex: 1;
+}
+
+@media (max-width: 1100px) {
+  .ap-calendar-layout {
+    grid-template-columns: 1fr;
+  }
+  .ap-calendar-pending-panel {
+    max-height: 300px;
   }
 }
 

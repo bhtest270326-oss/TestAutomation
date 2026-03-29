@@ -651,11 +651,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   });
 
-  // Wire up the sidebar toggle button if present
-  const sidebarToggle = document.getElementById('ap-sidebar-toggle');
-  if (sidebarToggle) {
-    sidebarToggle.addEventListener('click', toggleSidebar);
-  }
+  // Sidebar toggle is wired via onclick in HTML
 
   // Wire up the refresh button if present
   const refreshBtn = document.getElementById('ap-refresh-btn');
