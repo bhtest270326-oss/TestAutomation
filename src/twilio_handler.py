@@ -1,6 +1,7 @@
 import os
 import re
 import logging
+import threading
 from datetime import datetime
 from twilio.rest import Client
 from twilio.base.exceptions import TwilioRestException
@@ -42,21 +43,24 @@ def normalise_phone(number):
     return number
 
 def send_sms(to, body):
+    normed = normalise_phone(to)
+    if not normed or not normed.startswith('+'):
+        logger.warning('send_sms: invalid/unnormalisable phone %r — skipped', to)
+        return None
     try:
-        to = normalise_phone(to)
         client = get_twilio_client()
         message = client.messages.create(
             body=body,
             from_=os.environ['TWILIO_FROM_NUMBER'],
-            to=to
+            to=normed
         )
-        logger.info(f"SMS sent to {to}: SID {message.sid}")
+        logger.info(f"SMS sent to {normed}: SID {message.sid}")
         return message.sid
     except TwilioRestException as e:
         if e.code == 63038 or getattr(e, 'status', None) == 429:
-            logger.warning(f"Twilio daily SMS limit reached (429) — SMS to {to} not sent. Will retry next day.")
+            logger.warning(f"Twilio daily SMS limit reached (429) — SMS to {normed} not sent. Will retry next day.")
         else:
-            logger.error(f"Twilio error sending to {to}: {e}")
+            logger.error(f"Twilio error sending to {normed}: {e}")
         return None
 
 def send_owner_confirmation_request(pending_id, booking_data):
@@ -131,8 +135,8 @@ def _handle_customer_sms(from_number, body_text, message_sid, state):
                     matched_date = bd.get('preferred_date', '')
                     matched_status = row['status']
                     break
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning('_handle_customer_sms: error parsing booking row: %s', e)
 
         if matched_booking_id:
             # Forward to owner with context
@@ -153,8 +157,8 @@ def _handle_customer_sms(from_number, body_text, message_sid, state):
             try:
                 state.log_booking_event(matched_booking_id, 'customer_sms_received', actor='customer',
                     details={'message_snippet': body_text[:200], 'from': normalised})
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning('_handle_customer_sms: could not log event for %s: %s', matched_booking_id, e)
 
             logger.info(f"Customer SMS from {normalised} forwarded to owner (booking {matched_booking_id})")
         else:
@@ -320,11 +324,18 @@ def poll_sms_replies():
 def handle_owner_confirm(pending_id, pending):
     state = StateManager()
     booking_data = pending['booking_data']
-    # Idempotency guard — if already confirmed, skip silently
-    if pending.get('status') == 'confirmed':
-        logger.info(f"Booking {pending_id} already confirmed — ignoring duplicate YES")
-        return
-    # Confirm in DB first — atomic BEGIN IMMEDIATE prevents race conditions.
+    # Idempotency guard — check status inside BEGIN IMMEDIATE so concurrent YES
+    # replies are serialised and only one proceeds.
+    from state_manager import _get_conn
+    with _get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT status FROM bookings WHERE id=?", (pending_id,)
+        ).fetchone()
+        if not row or row['status'] != 'awaiting_owner':
+            logger.info(f"Booking {pending_id} is not awaiting_owner (status={row['status'] if row else 'missing'}) — ignoring duplicate YES")
+            return
+    # Confirm in DB — atomic BEGIN IMMEDIATE inside confirm_booking prevents races.
     # Only proceed to calendar/notifications if DB actually recorded the change.
     confirmed = state.confirm_booking(pending_id, booking_data)
     if not confirmed:
@@ -332,8 +343,8 @@ def handle_owner_confirm(pending_id, pending):
         try:
             send_sms(os.environ['OWNER_MOBILE'],
                 f"Booking {pending_id} could not be confirmed (already processed or DB error). Check /admin.")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not send confirm-failure SMS for {pending_id}: {e}")
         return
     # DB confirm succeeded — now handle calendar (failure is non-fatal)
     existing_event_id = pending.get('calendar_event_id')
@@ -377,27 +388,29 @@ def handle_owner_confirm(pending_id, pending):
     except Exception as e:
         logger.warning(f"Could not record service history for {pending_id}: {e}")
 
-    # Sync to Google Sheets
+    # Sync to Google Sheets — run in background thread so it doesn't block the response
     if get_flag('flag_google_sheets_sync'):
-        try:
-            from google_sheets import append_booking_row
-            # Re-fetch the booking after confirm so confirmed_at is populated
-            confirmed = state.get_confirmed_bookings()
-            confirmed_booking = confirmed.get(pending_id, {})
-            if not confirmed_booking:
-                # Fallback: build from what we have
-                confirmed_booking = dict(pending)
-                confirmed_booking['status'] = 'confirmed'
-            append_booking_row(pending_id, confirmed_booking)
-        except Exception as e:
-            logger.error(f"Google Sheets sync error for booking {pending_id}: {e}")
+        def _sheets_sync():
+            try:
+                from google_sheets import append_booking_row
+                # Re-fetch the booking after confirm so confirmed_at is populated
+                _confirmed = state.get_confirmed_bookings()
+                _confirmed_booking = _confirmed.get(pending_id, {})
+                if not _confirmed_booking:
+                    # Fallback: build from what we have
+                    _confirmed_booking = dict(pending)
+                    _confirmed_booking['status'] = 'confirmed'
+                append_booking_row(pending_id, _confirmed_booking)
+            except Exception as e:
+                logger.error(f"Google Sheets sync error for booking {pending_id}: {e}")
+        threading.Thread(target=_sheets_sync, daemon=True).start()
 
     try:
         state.log_booking_event(pending_id, 'confirmed', actor='owner_sms',
             details={'customer_notified_sms': bool(customer_phone and get_flag('flag_auto_sms_customer')),
                      'customer_notified_email': bool(customer_email and get_flag('flag_auto_email_customer'))})
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Could not log booking event for {pending_id}: {e}")
 
 def handle_owner_decline(pending_id, pending):
     state = StateManager()
@@ -431,8 +444,8 @@ def handle_owner_decline(pending_id, pending):
     try:
         state.log_booking_event(pending_id, 'declined', actor='owner_sms',
             details={'customer_notified': bool(customer_phone or customer_email)})
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Could not log decline event for {pending_id}: {e}")
 
 def handle_owner_day_cancellation(date_str: str, reason: str) -> None:
     """Cancel all confirmed bookings for a date and notify customers to rebook.
@@ -587,8 +600,8 @@ def handle_owner_correction(pending_id, pending, correction_text):
     try:
         state.log_booking_event(pending_id, 'data_updated', actor='owner_sms',
             details={'correction_text': correction_text[:200]})
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Could not log data_updated event for {pending_id}: {e}")
 
 def build_customer_confirmation_sms(booking_data):
     date = _fmt_date(booking_data.get('preferred_date', 'TBC'))
@@ -639,7 +652,8 @@ def send_confirmation_email(to_email, booking_data, booking_id=None, thread_id=N
                 )
             else:
                 reschedule_para = ''
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Could not generate reschedule link for confirmation email (booking {booking_id}): {e}")
             reschedule_para = ''
 
         content = (
@@ -735,8 +749,8 @@ def send_reschedule_change_email(to_email, booking_data, booking_id, old_date, t
                     f'to pick a different date — no need to email us.',
                     f'color:{DARK};'
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not generate reschedule link for change email (booking {booking_id}): {e}")
 
         content = (
             _p(f'Hi {first},')

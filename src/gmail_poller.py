@@ -45,31 +45,55 @@ def _detect_reschedule_intent(text: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _check_duplicate_booking(state, customer_email, booking_data):
-    """Return existing booking info if same customer+vehicle seen in last 30 days, else None."""
+    """Return existing booking info if a duplicate is detected, else None.
+
+    Checks two conditions (either triggers a duplicate flag):
+    1. Same customer + same vehicle seen in the last 30 days.
+    2. Same customer already has a booking on the same proposed date (regardless of vehicle).
+    """
     if not customer_email:
         return None
     from datetime import datetime, timezone, timedelta
     import json
     from state_manager import _get_conn
+
+    proposed_date = booking_data.get('preferred_date')
+
     cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
     with _get_conn() as conn:
+        # Check 1: same customer + same vehicle within the last 30 days
         rows = conn.execute(
             """SELECT id, booking_data, status, created_at FROM bookings
                WHERE customer_email = ? AND created_at > ?
                ORDER BY created_at DESC LIMIT 5""",
             (customer_email, cutoff)
         ).fetchall()
-    vehicle_make = (booking_data.get('vehicle_make') or '').lower().strip()
-    vehicle_model = (booking_data.get('vehicle_model') or '').lower().strip()
-    for row in rows:
-        try:
-            bd = json.loads(row['booking_data'])
-            if (bd.get('vehicle_make', '').lower().strip() == vehicle_make and
-                    bd.get('vehicle_model', '').lower().strip() == vehicle_model and
-                    vehicle_make):
-                return {'id': row['id'], 'status': row['status'], 'created_at': row['created_at']}
-        except Exception:
-            pass
+
+        vehicle_make = (booking_data.get('vehicle_make') or '').lower().strip()
+        vehicle_model = (booking_data.get('vehicle_model') or '').lower().strip()
+        for row in rows:
+            try:
+                bd = json.loads(row['booking_data'])
+                if (bd.get('vehicle_make', '').lower().strip() == vehicle_make and
+                        bd.get('vehicle_model', '').lower().strip() == vehicle_model and
+                        vehicle_make):
+                    return {'id': row['id'], 'status': row['status'], 'created_at': row['created_at']}
+            except Exception as e:
+                logger.debug("Duplicate check: could not parse booking_data for a row: %s", e)
+
+        # Check 2: same customer already has a booking on the same proposed date
+        if proposed_date:
+            existing_same_date = conn.execute(
+                "SELECT id FROM bookings WHERE customer_email=? AND preferred_date=? AND status IN ('awaiting_owner','confirmed')",
+                (customer_email, proposed_date)
+            ).fetchone()
+            if existing_same_date:
+                logger.warning(
+                    'Duplicate booking attempt: %s already has booking on %s',
+                    customer_email, proposed_date
+                )
+                return {'id': existing_same_date['id'], 'status': 'duplicate_date', 'created_at': None}
+
     return None
 
 
@@ -433,8 +457,8 @@ def process_history_notification(new_history_id):
 
         try:
             initialise_labels(service)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Label initialisation skipped in history notification: %s", e)
 
         for record in history_resp.get('history', []):
             for msg_added in record.get('messagesAdded', []):
@@ -827,8 +851,8 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
         )
         try:
             label_pending_reply(service, msg_id)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Could not apply pending-reply label for %s: %s", msg_id, e)
         logger.info(f"Clarification sent to {customer_email}, thread {thread_id}")
     else:
         # --- Duplicate / Repeat Customer Detection ---
@@ -884,8 +908,8 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
             )
             try:
                 label_pending_reply(service, msg_id)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Could not apply pending-reply label for %s: %s", msg_id, e)
             state.mark_email_processed(msg_id)
             return
 
@@ -933,8 +957,8 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
         send_owner_confirmation_request(pending_id, booking_data)
         try:
             label_awaiting_confirmation(service, msg_id)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Could not apply awaiting-confirmation label for %s: %s", msg_id, e)
         logger.info(f"Owner confirmation sent for booking {pending_id}")
 
 
@@ -975,8 +999,8 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
             logger.error(f"FAQ response error for {customer_email}: {_fe}")
         try:
             label_pending_reply(service, msg_id)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Could not apply pending-reply label for FAQ reply %s: %s", msg_id, e)
         state.mark_email_processed(msg_id)
         return
 
@@ -1004,8 +1028,8 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
                 existing_pending['id'], 'off_scope_question', actor='customer',
                 details={'message_snippet': body[:200], 'thread_id': thread_id}
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Could not log off_scope_question event for %s: %s", existing_pending.get('id'), e)
         state.mark_email_processed(msg_id)
         return
 
@@ -1169,8 +1193,8 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
         state.update_clarification_booking_data(existing_pending['id'], merged_data, still_missing)
         try:
             label_pending_reply(service, msg_id)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Could not apply pending-reply label for %s: %s", msg_id, e)
         logger.info(f"Still missing fields for thread {thread_id}: {still_missing}")
     else:
         # All data collected — check the requested date is actually available before booking
@@ -1188,8 +1212,8 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
             )
             try:
                 label_pending_reply(service, msg_id)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Could not apply pending-reply label for %s: %s", msg_id, e)
             state.mark_email_processed(msg_id)
             return
 
@@ -1207,8 +1231,8 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
         send_owner_confirmation_request(pending_id, merged_data)
         try:
             label_awaiting_confirmation(service, msg_id)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Could not apply awaiting-confirmation label for %s: %s", msg_id, e)
         logger.info(f"Clarification complete, owner confirmation sent for booking {pending_id}")
 
         # Mixed-intent: update draft with assigned slot and store metadata so the booking
@@ -1245,8 +1269,8 @@ def send_clarification_email(service, to_email, original_subject, missing_fields
     try:
         if booking_data and booking_data.get('customer_name'):
             name = booking_data['customer_name'].split()[0]
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Could not extract first name from booking_data: %s", e)
 
     # Build a summary of what was already captured
     captured_parts = []
@@ -1266,7 +1290,8 @@ def send_clarification_email(service, to_email, original_subject, missing_fields
                 captured_parts.append(('Location', location))
             if booking_data.get('preferred_date'):
                 captured_parts.append(('Preferred date', booking_data['preferred_date']))
-    except Exception:
+    except Exception as e:
+        logger.debug("Could not build captured_parts for clarification email: %s", e)
         captured_parts = []
 
     captured_block = _info_table(captured_parts) if captured_parts else ''

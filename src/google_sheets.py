@@ -7,9 +7,21 @@ Spreadsheet ID is persisted in app_state so it survives restarts.
 """
 import os
 import logging
+import concurrent.futures
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+
+
+def _with_timeout(fn, timeout=8):
+    """Run a zero-argument callable in a thread pool, raising TimeoutError after *timeout* seconds."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        future = ex.submit(fn)
+        try:
+            return future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            logger.error('Google Sheets API call timed out after %ds', timeout)
+            raise TimeoutError('Sheets API timeout')
 
 SHEETS_SHARE_EMAIL = os.environ.get('SHEETS_SHARE_EMAIL', os.environ.get('OWNER_EMAIL', ''))
 SPREADSHEET_TITLE = 'Wheel Doctor Bookings'
@@ -32,25 +44,27 @@ def _get_or_create_spreadsheet(sheets_svc, drive_svc, state) -> str:
         return existing_id
 
     # Create new spreadsheet
-    spreadsheet = sheets_svc.spreadsheets().create(body={
+    _create_req = sheets_svc.spreadsheets().create(body={
         'properties': {'title': SPREADSHEET_TITLE},
         'sheets': [{'properties': {'title': 'Bookings'}}]
-    }).execute()
+    })
+    spreadsheet = _with_timeout(_create_req.execute)
 
     spreadsheet_id = spreadsheet['spreadsheetId']
     logger.info(f"Created Google Sheet: {spreadsheet_id}")
 
     # Write headers
-    sheets_svc.spreadsheets().values().update(
+    _headers_req = sheets_svc.spreadsheets().values().update(
         spreadsheetId=spreadsheet_id,
         range='Bookings!A1',
         valueInputOption='RAW',
         body={'values': [SHEET_HEADERS]}
-    ).execute()
+    )
+    _with_timeout(_headers_req.execute)
 
     # Bold the header row and freeze it
     try:
-        sheets_svc.spreadsheets().batchUpdate(
+        _fmt_req = sheets_svc.spreadsheets().batchUpdate(
             spreadsheetId=spreadsheet_id,
             body={'requests': [
                 {'repeatCell': {
@@ -63,18 +77,20 @@ def _get_or_create_spreadsheet(sheets_svc, drive_svc, state) -> str:
                     'fields': 'gridProperties.frozenRowCount'
                 }}
             ]}
-        ).execute()
+        )
+        _with_timeout(_fmt_req.execute)
     except Exception as e:
         logger.warning(f"Could not format header row: {e}")
 
     # Share with configured email
     try:
-        drive_svc.permissions().create(
+        _share_req = drive_svc.permissions().create(
             fileId=spreadsheet_id,
             body={'type': 'user', 'role': 'writer', 'emailAddress': SHEETS_SHARE_EMAIL},
             sendNotificationEmail=True,
             emailMessage=f"Your Wheel Doctor booking log spreadsheet is ready."
-        ).execute()
+        )
+        _with_timeout(_share_req.execute)
         logger.info(f"Shared spreadsheet with {SHEETS_SHARE_EMAIL}")
     except Exception as e:
         logger.warning(f"Could not share spreadsheet with {SHEETS_SHARE_EMAIL}: {e}")
@@ -149,13 +165,14 @@ def append_booking_row(booking_id: str, booking: dict):
             booking.get('confirmed_at', datetime.now(timezone.utc).isoformat()),
         ]
 
-        sheets_svc.spreadsheets().values().append(
+        _append_req = sheets_svc.spreadsheets().values().append(
             spreadsheetId=spreadsheet_id,
             range='Bookings!A1',
             valueInputOption='RAW',
             insertDataOption='INSERT_ROWS',
             body={'values': [row]}
-        ).execute()
+        )
+        _with_timeout(_append_req.execute)
 
         logger.info(f"Booking {booking_id} appended to Google Sheet {spreadsheet_id}")
 

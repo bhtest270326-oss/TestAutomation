@@ -151,8 +151,8 @@ def _ensure_schema(conn):
     # Migration: UNIQUE index on clarifications.thread_id
     try:
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_clarifications_thread_unique ON clarifications(thread_id)")
-    except Exception:
-        pass  # Index may already exist or schema differs
+    except Exception as _e:
+        logger.debug("idx_clarifications_thread_unique not created (may already exist): %s", _e)
 
 
 def _migrate_from_json(conn):
@@ -233,14 +233,14 @@ def _migrate_from_json(conn):
     for mid in old.get('processed_emails', []):
         try:
             conn.execute("INSERT OR IGNORE INTO processed_emails(msg_id) VALUES (?)", (mid,))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Migration: could not insert processed_email %s: %s", mid, e)
 
     for sid in old.get('processed_sms', []):
         try:
             conn.execute("INSERT OR IGNORE INTO processed_sms(sms_sid) VALUES (?)", (sid,))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Migration: could not insert processed_sms %s: %s", sid, e)
 
     conn.execute("INSERT OR REPLACE INTO app_state(key,value) VALUES ('json_migration_done','1')")
     conn.commit()
@@ -251,8 +251,8 @@ def _migrate_from_json(conn):
         try:
             os.rename(_STATE_FILE_JSON, backup)
             logger.info(f"Legacy JSON renamed to {backup}")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Could not rename legacy JSON to %s: %s", backup, e)
 
 
 def _check_time_conflict(conn, preferred_date: str, preferred_time: str,
@@ -289,6 +289,14 @@ def _check_time_conflict(conn, preferred_date: str, preferred_time: str,
         return (False, None)
 
 
+VALID_TRANSITIONS = {
+    'awaiting_owner': {'confirmed', 'declined'},
+    'confirmed': {'cancelled'},
+    'declined': set(),
+    'cancelled': set(),
+}
+
+
 class StateManager:
     def __init__(self):
         conn = _get_conn()
@@ -303,6 +311,12 @@ class StateManager:
     def _conn(self):
         return _get_conn()
 
+    def _assert_transition(self, current_status: str, new_status: str) -> None:
+        """Raise ValueError if the status transition is not permitted."""
+        allowed = VALID_TRANSITIONS.get(current_status, set())
+        if new_status not in allowed:
+            raise ValueError(f'Invalid transition: {current_status!r} → {new_status!r}')
+
     # ------------------------------------------------------------------
     # Pending bookings
     # ------------------------------------------------------------------
@@ -310,16 +324,25 @@ class StateManager:
     def _next_booking_number(self) -> str:
         """Return the next sequential booking number (100001, 100002, …) atomically."""
         with _get_conn() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                "SELECT value FROM app_state WHERE key='booking_counter'"
-            ).fetchone()
-            current = int(row['value']) if row else 100000
-            nxt = current + 1
-            conn.execute(
-                "INSERT OR REPLACE INTO app_state(key, value) VALUES ('booking_counter', ?)",
-                (str(nxt),)
-            )
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT value FROM app_state WHERE key='booking_counter'"
+                ).fetchone()
+                val = row['value'] if row else None
+                current = int(val) if val is not None else 100000
+                nxt = current + 1
+                conn.execute(
+                    "INSERT OR REPLACE INTO app_state(key, value) VALUES ('booking_counter', ?)",
+                    (str(nxt),)
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+                raise
         return str(nxt)
 
     def create_pending_booking(self, booking_data, source, customer_email=None,
@@ -361,51 +384,64 @@ class StateManager:
 
     def confirm_booking(self, pending_id, booking_data=None):
         with self._conn() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                "SELECT id FROM bookings WHERE id=? AND status='awaiting_owner'",
-                (pending_id,)
-            ).fetchone()
-            if not row:
-                return False
-            if booking_data:
-                preferred_date = booking_data.get('preferred_date')
-                preferred_time = booking_data.get('preferred_time')
-                if preferred_date and preferred_time:
-                    from maps_handler import get_job_duration_minutes
-                    duration = get_job_duration_minutes(booking_data)
-                    has_conflict, conflicting_id = _check_time_conflict(
-                        conn, preferred_date, preferred_time, duration,
-                        exclude_booking_id=pending_id
-                    )
-                    if has_conflict:
-                        logger.warning(
-                            f"confirm_booking: time conflict for {pending_id} "
-                            f"with existing booking {conflicting_id}"
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT id, status FROM bookings WHERE id=?",
+                    (pending_id,)
+                ).fetchone()
+                if not row:
+                    conn.execute("ROLLBACK")
+                    return False
+                self._assert_transition(row['status'], 'confirmed')
+                if booking_data:
+                    preferred_date = booking_data.get('preferred_date')
+                    preferred_time = booking_data.get('preferred_time')
+                    if preferred_date and preferred_time:
+                        from maps_handler import get_job_duration_minutes
+                        duration = get_job_duration_minutes(booking_data)
+                        has_conflict, conflicting_id = _check_time_conflict(
+                            conn, preferred_date, preferred_time, duration,
+                            exclude_booking_id=pending_id
                         )
-                        self.log_booking_event(pending_id, 'confirm_failed', actor='system',
-                                               details={'reason': 'time_conflict',
-                                                        'conflicting_booking_id': conflicting_id})
+                        if has_conflict:
+                            logger.warning(
+                                f"confirm_booking: time conflict for {pending_id} "
+                                f"with existing booking {conflicting_id}"
+                            )
+                            conn.execute("ROLLBACK")
+                            self.log_booking_event(pending_id, 'confirm_failed', actor='system',
+                                                   details={'reason': 'time_conflict',
+                                                            'conflicting_booking_id': conflicting_id})
+                            return False
+                now_iso = datetime.now(timezone.utc).isoformat()
+                if booking_data:
+                    result = conn.execute("""
+                        UPDATE bookings
+                        SET status='confirmed', confirmed_at=?, booking_data=?,
+                            preferred_date=?
+                        WHERE id=?
+                    """, (now_iso, json.dumps(booking_data),
+                          booking_data.get('preferred_date'), pending_id))
+                    if result.rowcount == 0:
+                        logger.warning(f"confirm_booking: no rows updated for {pending_id}")
+                        conn.execute("ROLLBACK")
                         return False
-            params = [datetime.now(timezone.utc).isoformat(), pending_id]
-            if booking_data:
-                result = conn.execute("""
-                    UPDATE bookings
-                    SET status='confirmed', confirmed_at=?, booking_data=?,
-                        preferred_date=?
-                    WHERE id=?
-                """, (params[0], json.dumps(booking_data),
-                      booking_data.get('preferred_date'), pending_id))
-                if result.rowcount == 0:
-                    logger.warning(f"confirm_booking: no rows updated for {pending_id}")
-                    return False
-            else:
-                result = conn.execute("""
-                    UPDATE bookings SET status='confirmed', confirmed_at=? WHERE id=?
-                """, tuple(params))
-                if result.rowcount == 0:
-                    logger.warning(f"confirm_booking: no rows updated for {pending_id}")
-                    return False
+                else:
+                    result = conn.execute("""
+                        UPDATE bookings SET status='confirmed', confirmed_at=? WHERE id=?
+                    """, (now_iso, pending_id))
+                    if result.rowcount == 0:
+                        logger.warning(f"confirm_booking: no rows updated for {pending_id}")
+                        conn.execute("ROLLBACK")
+                        return False
+                conn.execute("COMMIT")
+            except Exception:
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+                raise
         self.log_booking_event(pending_id, 'confirmed', actor='system')
         logger.info(f"Confirmed booking {pending_id}")
         return True
@@ -531,8 +567,8 @@ class StateManager:
             if d.get('details'):
                 try:
                     d['details'] = json.loads(d['details'])
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Could not parse booking event details JSON for event %s: %s", d.get('id'), e)
             result.append(d)
         return result
 
@@ -717,6 +753,40 @@ class StateManager:
             )
 
     # ------------------------------------------------------------------
+    # Reschedule token replay-attack prevention
+    # ------------------------------------------------------------------
+
+    def mark_reschedule_token_used(self, token_hash: str) -> None:
+        """Store token hash so it cannot be replayed.
+
+        Uses the app_state table with key 'used_token_<hash[:32]>'.
+        Entries are automatically cleaned up after 8 days by
+        is_reschedule_token_used() which trims on each write.
+        """
+        key = f'used_token_{token_hash[:32]}'
+        value = datetime.now(timezone.utc).isoformat()
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO app_state(key, value) VALUES (?,?)",
+                (key, value)
+            )
+            # Purge entries older than 8 days while we have the connection open
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+            conn.execute(
+                "DELETE FROM app_state WHERE key LIKE 'used_token_%' AND value < ?",
+                (cutoff,)
+            )
+
+    def is_reschedule_token_used(self, token_hash: str) -> bool:
+        """Return True if token was already used."""
+        key = f'used_token_{token_hash[:32]}'
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM app_state WHERE key=?", (key,)
+            ).fetchone()
+        return row is not None
+
+    # ------------------------------------------------------------------
     # Dead-Letter Queue (Feature 3)
     # ------------------------------------------------------------------
 
@@ -819,17 +889,25 @@ class StateManager:
         Returns list of cancelled booking dicts.
         """
         with self._conn() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            rows = conn.execute("""
-                SELECT id, booking_data, customer_email, thread_id, calendar_event_id
-                FROM bookings
-                WHERE preferred_date = ? AND status IN ('confirmed', 'awaiting_owner')
-            """, (date_str,)).fetchall()
-            bookings = [dict(r) for r in rows]
-            conn.execute("""
-                UPDATE bookings SET status = 'owner_cancelled'
-                WHERE preferred_date = ? AND status IN ('confirmed', 'awaiting_owner')
-            """, (date_str,))
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                rows = conn.execute("""
+                    SELECT id, booking_data, customer_email, thread_id, calendar_event_id
+                    FROM bookings
+                    WHERE preferred_date = ? AND status IN ('confirmed', 'awaiting_owner')
+                """, (date_str,)).fetchall()
+                bookings = [dict(r) for r in rows]
+                conn.execute("""
+                    UPDATE bookings SET status = 'owner_cancelled'
+                    WHERE preferred_date = ? AND status IN ('confirmed', 'awaiting_owner')
+                """, (date_str,))
+                conn.execute("COMMIT")
+            except Exception:
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+                raise
         for b in bookings:
             self.log_booking_event(b['id'], 'owner_day_cancelled', actor=cancelled_by,
                                    details={'reason': reason, 'date': date_str})

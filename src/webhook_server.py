@@ -13,15 +13,47 @@ import hmac
 import json
 import base64
 import logging
+import time
+import collections
 from flask import Flask, request, jsonify
 
 logger = logging.getLogger(__name__)
 
 _PUBSUB_TOKEN = os.environ.get('PUBSUB_WEBHOOK_TOKEN', '')
 
+# Fix 5 — Hardcoded Claude model name: use env var with sensible default
+CLAUDE_MODEL = os.environ.get('CLAUDE_MODEL', 'claude-sonnet-4-6')
+
+# Fix 2 — In-memory rate limiter for reschedule token endpoints (per IP, 10 req/min)
+_reschedule_rate_limit: dict = collections.defaultdict(list)
+_RATE_LIMIT_MAX = 10
+_RATE_LIMIT_WINDOW = 60  # seconds
+
+
+def _check_rate_limit(ip: str) -> bool:
+    """Return True if the request is allowed, False if rate limit exceeded.
+    Also cleans up old timestamps to avoid memory growth.
+    """
+    now = time.monotonic()
+    window_start = now - _RATE_LIMIT_WINDOW
+    timestamps = _reschedule_rate_limit[ip]
+    # Drop timestamps outside the current window
+    timestamps[:] = [t for t in timestamps if t > window_start]
+    if len(timestamps) >= _RATE_LIMIT_MAX:
+        return False
+    timestamps.append(now)
+    return True
+
 
 def create_app():
     app = Flask(__name__)
+
+    # Fix 1 — Log Pub/Sub verification mode at startup
+    _pubsub_audience = os.environ.get('PUBSUB_AUDIENCE', '')
+    if _pubsub_audience:
+        logger.info("Pub/Sub JWT verification: ENABLED (PUBSUB_AUDIENCE=%s)", _pubsub_audience)
+    else:
+        logger.info("Pub/Sub JWT verification: DISABLED (PUBSUB_AUDIENCE not set — local dev mode)")
 
     from admin_ui import admin_bp
     app.register_blueprint(admin_bp)
@@ -33,12 +65,20 @@ def create_app():
     # Static assets (banner image etc.)
     # ------------------------------------------------------------------
 
+    # Fix 3 — Whitelist of allowed extensions for static file serving
+    _ALLOWED_STATIC_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.css', '.js', '.ico', '.svg', '.webp'}
+
     @app.route('/static/<path:filename>')
     def static_files(filename):
-        import os
-        from flask import send_from_directory
-        static_dir = os.path.join(os.path.dirname(__file__), 'static')
-        return send_from_directory(static_dir, filename)
+        import os as _os
+        from flask import send_from_directory, abort
+        # Strip any directory traversal attempts and check extension whitelist
+        safe_name = _os.path.basename(filename)
+        _, ext = _os.path.splitext(safe_name)
+        if ext.lower() not in _ALLOWED_STATIC_EXTENSIONS:
+            abort(404)
+        static_dir = _os.path.join(_os.path.dirname(__file__), 'static')
+        return send_from_directory(static_dir, safe_name)
 
     # ------------------------------------------------------------------
     # Gmail / Pub/Sub webhook
@@ -57,21 +97,23 @@ def create_app():
         if not envelope:
             return 'Bad Request: expected JSON', 400
 
+        # Fix 1 — JWT verification is mandatory when PUBSUB_AUDIENCE is set
         pubsub_audience = os.environ.get('PUBSUB_AUDIENCE', '')
         if pubsub_audience:
             auth_header = request.headers.get('Authorization', '')
-            if auth_header.startswith('Bearer '):
-                token = auth_header[7:]
-                try:
-                    from google.oauth2 import id_token
-                    from google.auth.transport import requests as grequests
-                    id_token.verify_oauth2_token(token, grequests.Request(), pubsub_audience)
-                except Exception as e:
-                    logger.warning(f"Gmail Pub/Sub JWT verification failed: {e}")
-                    return jsonify({'error': 'Invalid token'}), 403
-            else:
-                logger.warning("Gmail webhook received without Authorization header (PUBSUB_AUDIENCE set but no token)")
-                # Still process — don't block if token missing (gradual rollout)
+            if not auth_header.startswith('Bearer '):
+                logger.warning(
+                    "Gmail webhook: missing Authorization header (PUBSUB_AUDIENCE is set — rejecting)"
+                )
+                return jsonify({'error': 'Missing token'}), 403
+            token = auth_header[7:]
+            try:
+                from google.oauth2 import id_token
+                from google.auth.transport import requests as grequests
+                id_token.verify_oauth2_token(token, grequests.Request(), pubsub_audience)
+            except Exception as e:
+                logger.warning("Gmail Pub/Sub JWT verification failed: %s", e)
+                return jsonify({'error': 'Invalid token'}), 403
 
         pubsub_message = envelope.get('message', {})
         data_b64 = pubsub_message.get('data', '')
@@ -82,14 +124,14 @@ def create_app():
         try:
             notification = json.loads(base64.b64decode(data_b64).decode('utf-8'))
         except Exception as e:
-            logger.error(f"Gmail webhook: failed to decode Pub/Sub message: {e}")
+            logger.error("Gmail webhook: failed to decode Pub/Sub message: %s", e)
             return 'Bad Request: decode failed', 400
 
         history_id = notification.get('historyId')
         if not history_id:
             return 'OK', 200
 
-        logger.info(f"Gmail webhook: historyId={history_id}")
+        logger.info("Gmail webhook: historyId=%s", history_id)
 
         try:
             from gmail_poller import process_history_notification
@@ -98,10 +140,11 @@ def create_app():
                 from state_manager import StateManager
                 from datetime import datetime, timezone
                 StateManager().set_app_state('last_gmail_poll_at', datetime.now(timezone.utc).isoformat())
-            except Exception:
-                pass
+            except Exception as e:
+                # Fix 6 — log instead of silently swallowing
+                logger.warning("Failed to update last_gmail_poll_at: %s", e)
         except Exception as e:
-            logger.error(f"Gmail webhook processing error: {e}", exc_info=True)
+            logger.error("Gmail webhook processing error: %s", e, exc_info=True)
             # Return 200 anyway — returning 4xx/5xx causes Pub/Sub to retry
 
         return 'OK', 200
@@ -131,13 +174,13 @@ def create_app():
         if not message_sid:
             return 'Bad Request', 400
 
-        logger.info(f"Twilio webhook: SMS from {from_number} SID={message_sid}")
+        logger.info("Twilio webhook: SMS from %s SID=%s", from_number, message_sid)
 
         try:
             from twilio_handler import process_single_sms_webhook
             process_single_sms_webhook(from_number, body_text, message_sid)
         except Exception as e:
-            logger.error(f"Twilio webhook processing error: {e}", exc_info=True)
+            logger.error("Twilio webhook processing error: %s", e, exc_info=True)
 
         # Return empty TwiML — Twilio requires a valid XML response
         return (
@@ -153,6 +196,15 @@ def create_app():
     @app.route('/reschedule/<token>', methods=['GET'])
     def reschedule_page(token):
         """Customer-facing reschedule page — calendar UI with month navigation."""
+        # Fix 2 — Rate limit per IP
+        client_ip = request.remote_addr or '0.0.0.0'
+        if not _check_rate_limit(client_ip):
+            return (
+                "<h2 style='font-family:sans-serif;'>Too many requests.</h2>"
+                "<p style='font-family:sans-serif;'>Please wait a moment and try again.</p>",
+                429
+            )
+
         from email_utils import verify_reschedule_token
         from state_manager import StateManager
         from maps_handler import get_week_availability, get_job_duration_minutes, _is_business_day
@@ -178,9 +230,16 @@ def create_app():
 
         # Determine which month to display (default: current month, min: today)
         today = _date.today()
+        current_year = today.year
         month_param = request.args.get('month', today.strftime('%Y-%m'))
+
+        # Fix 4 — Validate month parameter bounds; default to current month/year on error
         try:
-            view_year, view_month = int(month_param[:4]), int(month_param[5:7])
+            view_year = int(month_param[:4])
+            view_month = int(month_param[5:7])
+            # Bounds check: year within ±2 of current, month 1–12
+            if not (current_year - 1 <= view_year <= current_year + 2) or not (1 <= view_month <= 12):
+                raise ValueError("month parameter out of bounds")
             view_first = _date(view_year, view_month, 1)
         except Exception:
             view_first = today.replace(day=1)
@@ -332,6 +391,15 @@ def create_app():
     @app.route('/reschedule/<token>/confirm/<new_date>', methods=['GET'])
     def reschedule_confirm(token, new_date):
         """Confirm the reschedule to the selected date."""
+        # Fix 2 — Rate limit per IP (shared counter with reschedule_page)
+        client_ip = request.remote_addr or '0.0.0.0'
+        if not _check_rate_limit(client_ip):
+            return (
+                "<h2 style='font-family:sans-serif;'>Too many requests.</h2>"
+                "<p style='font-family:sans-serif;'>Please wait a moment and try again.</p>",
+                429
+            )
+
         import re, json
         from html import escape as _esc2
         from email_utils import verify_reschedule_token
@@ -366,8 +434,9 @@ def create_app():
         try:
             state.log_booking_event(booking_id, 'rescheduled', actor='customer_self_service',
                 details={'old_date': old_date, 'new_date': new_date})
-        except Exception:
-            pass
+        except Exception as e:
+            # Fix 6 — log instead of silently swallowing
+            logger.warning("Failed to log booking event: %s", e)
 
         # Notify owner via SMS
         if get_flag('flag_auto_sms_owner'):
@@ -379,7 +448,7 @@ def create_app():
                     send_sms(owner_mobile,
                         f"Booking {booking_id} rescheduled by customer from {old_date} to {new_date} ({cust_name}). - Wheel Doctor System")
             except Exception as e:
-                logger.warning(f"Owner reschedule SMS failed: {e}")
+                logger.warning("Owner reschedule SMS failed: %s", e)
 
         # Send booking change confirmation email to customer
         if get_flag('flag_auto_email_customer'):
@@ -389,7 +458,7 @@ def create_app():
                     from twilio_handler import send_reschedule_change_email
                     send_reschedule_change_email(customer_email, bd, booking_id, old_date, thread_id=booking.get('thread_id'))
             except Exception as e:
-                logger.warning(f"Reschedule change email failed: {e}")
+                logger.warning("Reschedule change email failed: %s", e)
 
         # Build a branded success page with a fresh reschedule link
         from email_utils import build_email_html, generate_reschedule_token, _p, _h2, RED, DARK
@@ -397,7 +466,8 @@ def create_app():
 
         try:
             new_date_fmt = _esc2(_dt2.strptime(new_date, '%Y-%m-%d').strftime('%A, %d %B %Y').replace(' 0', ' '))
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to format new_date '%s': %s", new_date, e)
             new_date_fmt = _esc2(new_date)
 
         customer_name = _esc2((bd.get('customer_name') or 'there').split()[0])
@@ -413,8 +483,8 @@ def create_app():
                     f'Changed your mind? <a href="{reschedule_again_url}" style="color:{RED};">Click here</a> '
                     f'to pick a different date.</p>'
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to build reschedule_again link: %s", e)
 
         page_content = (
             f'<h1 style="color:{RED};font-size:22px;margin:0 0 16px;">Booking Updated</h1>'
@@ -442,8 +512,9 @@ def create_app():
         """Diagnostic endpoint — tests whether the Anthropic API is reachable."""
         try:
             from ai_parser import client
+            # Fix 5 — use CLAUDE_MODEL env var instead of hardcoded string
             resp = client.messages.create(
-                model="claude-3-5-sonnet-20241022",
+                model=CLAUDE_MODEL,
                 max_tokens=10,
                 messages=[{"role": "user", "content": "Reply with the single word OK"}]
             )

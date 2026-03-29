@@ -22,7 +22,8 @@ def _fmt_date(date_str):
     try:
         dt = datetime.strptime(date_str, '%Y-%m-%d')
         return dt.strftime('%A, %d %B %Y').replace(' 0', ' ')
-    except Exception:
+    except Exception as e:
+        logger.warning('Could not format date %r: %s', date_str, e)
         return date_str
 
 
@@ -50,15 +51,22 @@ _TASK_INTERVALS = {
     'check_waitlist_opportunities': 3600,  # every hour
 }
 
-_task_last_run: dict = {}
+_KNOWN_TASKS = frozenset(_TASK_INTERVALS.keys())
+_task_last_run: dict = {k: 0.0 for k in _KNOWN_TASKS}
 
 def _should_run(task_name: str) -> bool:
     """Return True if enough time has elapsed since this task last ran."""
+    if task_name not in _KNOWN_TASKS:
+        logger.warning('_should_run called with unknown task name %r — skipping', task_name)
+        return False
     interval = _TASK_INTERVALS.get(task_name, 60)
     last = _task_last_run.get(task_name, 0)
     return (_time.monotonic() - last) >= interval
 
 def _mark_ran(task_name: str) -> None:
+    if task_name not in _KNOWN_TASKS:
+        logger.warning('_mark_ran called with unknown task name %r — ignoring', task_name)
+        return
     _task_last_run[task_name] = _time.monotonic()
 
 def _perth_now():
@@ -176,8 +184,8 @@ def _alert_owner_overrun(date_str, overrun_jobs):
         cooldown_key = f'overrun_alert_sent_{date_str}'
         if state.get_app_state(cooldown_key):
             return  # already alerted for this date
-    except Exception:
-        pass  # if state check fails, proceed to send
+    except Exception as e:
+        logger.warning('Overrun alert cooldown state check failed: %s — proceeding to send', e)
 
     names = ', '.join(
         bd.get('customer_name') or bid
@@ -196,8 +204,8 @@ def _alert_owner_overrun(date_str, overrun_jobs):
             logger.warning(f"Owner alerted: schedule overrun on {date_str}")
             try:
                 state.set_app_state(cooldown_key, _perth_now().isoformat())
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning('Could not persist overrun alert cooldown key: %s', e)
         else:
             logger.warning(f"Overrun SMS to owner failed (send_sms returned None) — cooldown not set, will retry")
     except Exception as e:
@@ -305,8 +313,8 @@ def optimize_daily_routes():
                     job_end = job_start + timedelta(minutes=duration)
                     if job_end > day_end:
                         overrun_jobs.append((bid, new_bd))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning('Could not compute overrun for booking %s time %r: %s', bid, new_time, e)
 
                 if new_time != current_times.get(bid, ''):
                     state.update_confirmed_booking_data(bid, new_bd)
@@ -421,7 +429,8 @@ def _time_window(time_str, duration_minutes=120):
         def fmt(dt):
             return dt.strftime("%-I:%M%p").lower().replace(':00', '')
         return f"{fmt(start)} – {fmt(end)}"
-    except Exception:
+    except Exception as e:
+        logger.warning('Could not format time window for %r: %s', time_str, e)
         return time_str
 
 def _send_morning_email(to_email, booking_data, thread_id=None):
@@ -549,7 +558,8 @@ def send_post_job_review_requests():
             review_send_time = job_start + timedelta(hours=3)
             if now < review_send_time:
                 continue
-        except Exception:
+        except Exception as e:
+            logger.warning('Could not parse review send time for booking %s (%r %r): %s', booking_id, booking_date, time_str, e)
             continue
 
         customer_phone = booking_data.get('customer_phone')
@@ -608,7 +618,8 @@ def check_pending_booking_expiry():
             # Ensure timezone-aware for comparison
             if created_at.tzinfo is None:
                 created_at = created_at.replace(tzinfo=timezone.utc)
-        except Exception:
+        except Exception as e:
+            logger.warning('Could not parse created_at %r for booking %s: %s', created_at_str, booking_id, e)
             continue
 
         age = now_utc - created_at
@@ -679,7 +690,8 @@ def send_owner_daily_briefing():
         duration = get_job_duration_minutes(last_bd)
         finish_dt = last_start + timedelta(minutes=duration)
         finish_time = finish_dt.strftime('%H:%M')
-    except Exception:
+    except Exception as e:
+        logger.warning('Could not compute finish time for daily briefing (%r %r): %s', today, last_time_str, e)
         finish_time = '?'
 
     msg = (
@@ -788,7 +800,8 @@ def send_preflight_schedule_report():
             try:
                 job_start = _dt.strptime(f"{today} {t}", "%Y-%m-%d %H:%M")
                 job_end = job_start + _td(minutes=duration)
-            except Exception:
+            except Exception as e:
+                logger.warning('Could not parse job time for preflight report, booking %s time %r: %s', bid, t, e)
                 continue
             if i > 0 and job_start < prev_end:
                 issues.append(f"CONFLICT job {i+1} ({customer}) overlaps previous")
@@ -852,8 +865,15 @@ def send_maintenance_reminders():
         logger.error(f"send_maintenance_reminders failed: {e}", exc_info=True)
 
 
+_BACKUP_MAX_BYTES = 25 * 1024 * 1024  # 25 MB — Gmail attachment limit
+
 def backup_database_to_email():
-    """At 02:00 Perth time, email the SQLite database as an attachment to the owner."""
+    """At 02:00 Perth time, email the SQLite database as an attachment to the owner.
+
+    WARNING: This backup contains PII (customer names, phones, addresses) and is
+    sent unencrypted as a standard email attachment.  Ensure the owner's inbox
+    is adequately secured.  For encrypted backups, consider GPG before attaching.
+    """
     now = _perth_now()
     if not (now.hour == 2 and now.minute < 5):
         return
@@ -865,6 +885,14 @@ def backup_database_to_email():
     if last_backup == today:
         return
 
+    owner_email = os.environ.get('OWNER_EMAIL', '')
+    if owner_email:
+        logger.warning(
+            'backup_database_to_email: sending database to %s — file contains PII '
+            '(customer names, phones, addresses) and is transmitted unencrypted.',
+            owner_email,
+        )
+
     try:
         from google_auth import get_gmail_service
         from email.mime.multipart import MIMEMultipart
@@ -872,9 +900,25 @@ def backup_database_to_email():
         from email import encoders
         import base64
 
+        # Safety: refuse to send if the DB file exceeds the email attachment limit
+        try:
+            db_size = os.path.getsize(DB_PATH)
+        except OSError as e:
+            logger.error('backup_database_to_email: cannot stat DB file %s: %s', DB_PATH, e)
+            return
+
+        if db_size > _BACKUP_MAX_BYTES:
+            logger.warning(
+                'backup_database_to_email: DB file is %.1f MB — exceeds 25 MB email limit; '
+                'skipping attachment send.  Use an alternative backup method.',
+                db_size / (1024 * 1024),
+            )
+            state.set_app_state('last_backup_date', today)
+            return
+
         service = get_gmail_service()
         msg = MIMEMultipart()
-        msg['to'] = os.environ.get('OWNER_EMAIL', '')
+        msg['to'] = owner_email
         msg['subject'] = f"Wheel Doctor DB Backup — {today}"
 
         with open(DB_PATH, 'rb') as f:

@@ -36,7 +36,9 @@ def _is_valid_au_phone(phone: str) -> bool:
     return False
 
 
-client = anthropic.Anthropic(api_key=os.environ['ANTHROPIC_API_KEY'])
+CLAUDE_MODEL = os.environ.get('CLAUDE_MODEL', 'claude-sonnet-4-6')
+
+client = anthropic.Anthropic(api_key=os.environ['ANTHROPIC_API_KEY'], timeout=30)
 
 
 def _call_claude(*, model, max_tokens, messages, tools=None, tool_choice=None, system=None):
@@ -54,6 +56,14 @@ def _call_claude(*, model, max_tokens, messages, tools=None, tool_choice=None, s
     for attempt in range(3):
         try:
             return client.messages.create(**kwargs)
+        except _anthropic.APITimeoutError as e:
+            logger.warning(f"Claude API timeout on attempt {attempt+1}: {e}")
+            if attempt < 2:
+                delay = 2 ** attempt
+                _time.sleep(delay)
+                last_err = e
+                continue
+            raise
         except _anthropic.APIStatusError as e:
             if e.status_code in (429, 500, 502, 503, 504) and attempt < 2:
                 delay = 2 ** attempt  # 1s, 2s
@@ -416,7 +426,7 @@ def generate_faq_response(
             missing_list=missing_list,
         )
         response = _call_claude(
-            model=os.environ.get('CLAUDE_EXTRACTION_MODEL', 'claude-sonnet-4-6'),
+            model=os.environ.get('CLAUDE_EXTRACTION_MODEL', CLAUDE_MODEL),
             max_tokens=600,
             messages=[{'role': 'user', 'content': prompt}],
         )
@@ -500,7 +510,8 @@ def draft_off_scope_reply(
         try:
             _dt = datetime.strptime(_pref_date, '%Y-%m-%d')
             _date_fmt = _dt.strftime('%A %d %B %Y').replace(' 0', ' ')
-        except Exception:
+        except Exception as e:
+            logger.warning('Could not format booking date %r: %s', _pref_date, e)
             _date_fmt = _pref_date
         _booking_date_str = f"{_date_fmt} at {_pref_time}" if _pref_time else _date_fmt
         _banner_date = f' &nbsp;|&nbsp; Booking date: <strong>{_booking_date_str}</strong>'
@@ -527,7 +538,7 @@ def draft_off_scope_reply(
             booking_date_context=booking_date_context,
         )
         response = _call_claude(
-            model=os.environ.get('CLAUDE_EXTRACTION_MODEL', 'claude-sonnet-4-6'),
+            model=os.environ.get('CLAUDE_EXTRACTION_MODEL', CLAUDE_MODEL),
             max_tokens=600,
             messages=[{'role': 'user', 'content': prompt}],
         )
@@ -627,7 +638,8 @@ def format_availability_response(
             try:
                 slot_dt = _dt.strptime(slot['date'], '%Y-%m-%d')
                 short_date = slot_dt.strftime('%d %b').lstrip('0')
-            except Exception:
+            except Exception as e:
+                logger.warning('Could not format availability slot date %r: %s', slot.get('date'), e)
                 short_date = ''
 
             day_with_date = f'{slot["day_name"]} {short_date}' if short_date else slot["day_name"]
@@ -660,7 +672,8 @@ def format_availability_response(
             req_dt = _dt.strptime(requested_slot['date'], '%Y-%m-%d')
             req_short_date = req_dt.strftime('%d %b').lstrip('0')
             day_name_with_date = f'{day_name} {req_short_date}'
-        except Exception:
+        except Exception as e:
+            logger.warning('Could not format requested slot date %r: %s', requested_slot.get('date'), e)
             day_name_with_date = day_name
         if requested_slot['available']:
             requested_day_sentence = (
@@ -870,7 +883,7 @@ def extract_booking_details(message_body, subject="", customer_email=""):
         )
 
         response = _call_claude(
-            model=os.environ.get('CLAUDE_EXTRACTION_MODEL', 'claude-sonnet-4-6'),
+            model=os.environ.get('CLAUDE_EXTRACTION_MODEL', CLAUDE_MODEL),
             max_tokens=2000,
             messages=[{"role": "user", "content": full_prompt_text}],
             tools=[booking_tool],
@@ -1041,7 +1054,7 @@ def parse_owner_correction(original_booking, correction_text, slot_hint=None):
         )
 
         response = _call_claude(
-            model=os.environ.get('CLAUDE_EXTRACTION_MODEL', 'claude-sonnet-4-6'),
+            model=os.environ.get('CLAUDE_EXTRACTION_MODEL', CLAUDE_MODEL),
             max_tokens=1000,
             messages=[{"role": "user", "content": prompt_text}],
             tools=[correction_tool],

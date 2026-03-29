@@ -10,6 +10,7 @@ Colour scheme matches the Perth Swedish & European Auto Centre banner:
 import os
 import hmac
 import hashlib
+import secrets
 import time as _ts_time
 import base64
 import logging
@@ -18,6 +19,15 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Reschedule token secret — must be set in env vars for production security
+# ---------------------------------------------------------------------------
+RESCHEDULE_SECRET = os.environ.get('RESCHEDULE_SECRET', '')
+if not RESCHEDULE_SECRET:
+    import warnings
+    warnings.warn('RESCHEDULE_SECRET not set — reschedule tokens are insecure!', stacklevel=2)
+    RESCHEDULE_SECRET = 'insecure-fallback-' + secrets.token_hex(8)  # random per-process at least
 
 # Public base URL of the Railway deployment — set APP_BASE_URL in Railway env vars
 _APP_BASE_URL = os.environ.get('APP_BASE_URL', '').rstrip('/')
@@ -180,19 +190,31 @@ def send_customer_email(
     service.users().messages().send(userId='me', body=send_body).execute()
 
 
+def _token_hash(token: str) -> str:
+    """Return a stable SHA-256 hex digest of a token string, used for replay detection."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 def generate_reschedule_token(booking_id: str) -> str:
     """Generate a short-lived signed token for self-service reschedule."""
-    secret = os.environ.get('RESCHEDULE_SECRET', 'default-dev-secret-change-me')
     expires = int(_ts_time.time()) + 7 * 86400  # 7 days
     payload = f"{booking_id}:{expires}"
-    sig = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
+    sig = hmac.new(RESCHEDULE_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
     return f"{payload}:{sig}"
 
 
-def verify_reschedule_token(token: str) -> str | None:
-    """Verify a reschedule token. Returns booking_id if valid, None if expired/invalid."""
+def verify_reschedule_token(token: str, state=None) -> str | None:
+    """Verify a reschedule token.
+
+    Returns booking_id if valid, None if expired/invalid/already used.
+
+    Args:
+        token: The reschedule token string.
+        state: Optional StateManager instance.  When provided, replay-used tokens
+               are rejected and callers should call mark_reschedule_token_used()
+               after successfully processing the reschedule.
+    """
     try:
-        secret = os.environ.get('RESCHEDULE_SECRET', 'default-dev-secret-change-me')
         parts = token.split(':')
         if len(parts) != 3:
             return None
@@ -201,12 +223,25 @@ def verify_reschedule_token(token: str) -> str | None:
         if _ts_time.time() > expires:
             return None  # expired
         payload = f"{booking_id}:{expires_str}"
-        expected_sig = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
+        expected_sig = hmac.new(RESCHEDULE_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
         if not hmac.compare_digest(sig, expected_sig):
             return None
+        # Replay-attack guard: reject tokens that have already been used
+        if state is not None:
+            th = _token_hash(token)
+            if state.is_reschedule_token_used(th):
+                logger.warning('Reschedule token replay attempt detected for booking %s', booking_id)
+                return None
         return booking_id
     except Exception:
+        logger.exception('verify_reschedule_token raised an unexpected error')
         return None
+
+
+def mark_reschedule_token_used(token: str, state) -> None:
+    """Record a token as used so it cannot be replayed."""
+    th = _token_hash(token)
+    state.mark_reschedule_token_used(th)
 
 
 def update_gmail_draft(service, draft_id: str, to_email: str, subject: str, html_body: str, thread_id: str = None) -> bool:
