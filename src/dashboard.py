@@ -1,5 +1,5 @@
 """
-Local Rim Repair Dashboard — double-click 'Start Dashboard.bat' to open.
+Local Wheel Doctor Dashboard — double-click 'Start Dashboard.bat' to open.
 Reads from the local SQLite database by default.
 Set railway_url in dashboard_config.json to pull live data from Railway instead.
 """
@@ -152,7 +152,7 @@ _HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Rim Repair — Control Centre</title>
+<title>Wheel Doctor — Control Centre</title>
 <style>
 :root {
   --bg:#07111f; --surface:#0d1f35; --card:#112240; --border:#1a3a5c;
@@ -318,7 +318,7 @@ input:checked+.slider:before{transform:translateX(21px);}
   <div class="header-left">
     <div class="logo">&#9881;</div>
     <div>
-      <div class="title">Rim Repair Control Centre</div>
+      <div class="title">Wheel Doctor Control Centre</div>
       <div class="subtitle" id="mode-label">Loading…</div>
     </div>
   </div>
@@ -1010,7 +1010,7 @@ def api_booking_decline_with_reason(booking_id):
                     name = (bd.get('customer_name') or 'there').split()[0]
                     send_sms(customer_phone,
                         f"Hi {name}, unfortunately we're unable to accommodate your booking request "
-                        f"at this time. Please contact us if you'd like to discuss alternatives. - Rim Repair Team")
+                        f"at this time. Please contact us if you'd like to discuss alternatives. - Wheel Doctor Team")
                 except Exception as e:
                     pass
             return jsonify({'ok': True})
@@ -1154,7 +1154,7 @@ def _open_browser():
 
 
 if __name__ == '__main__':
-    print(f'\n  Rim Repair Dashboard starting on http://localhost:{PORT}')
+    print(f'\n  Wheel Doctor Dashboard starting on http://localhost:{PORT}')
     print('  Close this window to stop the dashboard.\n')
     threading.Thread(target=_open_browser, daemon=True).start()
     app.run(host='127.0.0.1', port=PORT, debug=False)

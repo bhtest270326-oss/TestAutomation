@@ -23,7 +23,7 @@ PRICING = {
 }
 
 SERVICE_LABELS = {
-    "rim_repair": "Rim Repair",
+    "rim_repair": "Wheel Doctor",
     "paint_touchup": "Paint Touch-up",
     "multiple_rims": "Multiple Rims",
 }

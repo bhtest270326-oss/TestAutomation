@@ -56,7 +56,7 @@ function destroyChart(key) {
 // ---------------------------------------------------------------------------
 function serviceLabel(type) {
   const MAP = {
-    rim_repair:    'Rim Repair',
+    rim_repair:    'Wheel Doctor Service',
     paint_touchup: 'Paint Touch-up',
     multiple_rims: 'Multiple Rims',
   };

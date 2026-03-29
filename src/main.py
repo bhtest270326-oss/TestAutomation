@@ -83,7 +83,7 @@ def _background_loop():
 
 def main():
     _configure_logging()
-    logger.info("Rim Repair Booking System starting...")
+    logger.info("Wheel Doctor Booking System starting...")
 
     if PUBSUB_ENABLED:
         logger.info("Pub/Sub mode: real-time Gmail webhooks enabled")

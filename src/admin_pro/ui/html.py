@@ -10,7 +10,7 @@ HTML_SIDEBAR = """
         <path d="M2 9h14l3 5H2V9z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </div>
-    <div class="ap-sidebar-logo-text">Perth S&amp;E Auto Centre</div>
+    <div class="ap-sidebar-logo-text">Wheel Doctor</div>
   </div>
   <div class="ap-brand-strip">
     <span class="ap-brand-name">Control Pro</span>

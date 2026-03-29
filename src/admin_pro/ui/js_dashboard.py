@@ -232,7 +232,7 @@ function renderRecentBookings(bookings) {
     const name        = escHtml(bd.name || bd.customer_name || b.customer_email || 'Unknown');
     const service     = escHtml(bd.service_type
       ? bd.service_type.replace(/_/g, ' ').replace(/\\b\\w/g, function(c) { return c.toUpperCase(); })
-      : 'Rim Repair');
+      : 'Wheel Doctor Service');
     const date        = escHtml(b.preferred_date || bd.preferred_date || '—');
     const statusBadge = '<span class="ap-badge ap-badge-amber">Pending</span>';
     const id          = escHtml(b.id || '');
@@ -284,7 +284,7 @@ function renderTodayJobs(bookings) {
     const suburb = escHtml(bd.suburb || bd.address_suburb || bd.location_suburb || '');
     const service = escHtml(bd.service_type
       ? bd.service_type.replace(/_/g, ' ').replace(/\\b\\w/g, function(c) { return c.toUpperCase(); })
-      : 'Rim Repair');
+      : 'Wheel Doctor Service');
 
     html += `
       <div class="ap-timeline-item">

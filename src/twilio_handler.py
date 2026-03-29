@@ -145,7 +145,7 @@ def _handle_customer_sms(from_number, body_text, message_sid, state):
             # Auto-acknowledge to customer
             ack_msg = (
                 f"Hi {matched_name}, thanks for your message — we've received it and will be in touch shortly. "
-                f"- Rim Repair Team"
+                f"- Wheel Doctor Team"
             )
             send_sms(from_number, ack_msg)
 
@@ -411,7 +411,7 @@ def handle_owner_decline(pending_id, pending):
     customer_email = pending.get('customer_email') or booking_data.get('customer_email')
     if customer_phone and get_flag('flag_auto_sms_customer'):
         send_sms(customer_phone,
-            f"Hi {booking_data.get('customer_name', 'there')}, thank you for getting in touch with Rim Repair. "
+            f"Hi {booking_data.get('customer_name', 'there')}, thank you for getting in touch with Wheel Doctor. "
             f"Unfortunately, we're unable to accommodate your requested time. "
             f"Please reply and we'll do our best to find a suitable time for you.")
     if customer_email and get_flag('flag_auto_email_customer'):
@@ -477,9 +477,9 @@ def handle_owner_day_cancellation(date_str: str, reason: str) -> None:
         if customer_phone and get_flag('flag_auto_sms_customer'):
             try:
                 msg = (
-                    f"Hi {customer_name}, unfortunately we need to cancel your Rim Repair "
+                    f"Hi {customer_name}, unfortunately we need to cancel your Wheel Doctor "
                     f"appointment on {_fmt_date(date_str)} due to {reason}. We sincerely apologise. "
-                    f"Please reply or email us to rebook at your convenience. - Rim Repair Team"
+                    f"Please reply or email us to rebook at your convenience. - Wheel Doctor Team"
                 )
                 send_sms(customer_phone, msg)
                 notified += 1
@@ -494,13 +494,13 @@ def handle_owner_day_cancellation(date_str: str, reason: str) -> None:
                 service = get_gmail_service()
                 content = (
                     _p(f'Hi {customer_name},')
-                    + _p(f'We regret to inform you that your Rim Repair appointment on '
+                    + _p(f'We regret to inform you that your Wheel Doctor appointment on '
                          f'<strong>{_fmt_date(date_str)}</strong> has been cancelled due to {reason}.')
                     + _p('We sincerely apologise for the inconvenience. '
                          'Please reply to this email or call us and we\'ll get you rebooked as soon as possible.')
                     + _p('We\'ll do our best to prioritise your rebooking.')
                     + f'<p style="margin:24px 0 0;color:{DARK};font-size:15px;">'
-                    f'Kind regards,<br><strong style="color:{RED};">Rim Repair Team</strong></p>'
+                    f'Kind regards,<br><strong style="color:{RED};">Wheel Doctor Team</strong></p>'
                 )
                 send_customer_email(service, customer_email,
                     f'Appointment Cancelled — {_fmt_date(date_str)}', content)
@@ -511,7 +511,7 @@ def handle_owner_day_cancellation(date_str: str, reason: str) -> None:
         send_sms(
             os.environ['OWNER_MOBILE'],
             f"Day cancellation complete: {len(cancelled)} booking(s) cancelled for {date_str}. "
-            f"{notified} customer(s) notified via SMS. - Rim Repair System"
+            f"{notified} customer(s) notified via SMS. - Wheel Doctor System"
         )
     except Exception as e:
         logger.error(f"Could not send day cancellation summary to owner: {e}")
@@ -594,9 +594,9 @@ def build_customer_confirmation_sms(booking_data):
     date = _fmt_date(booking_data.get('preferred_date', 'TBC'))
     address = booking_data.get('address') or booking_data.get('suburb', 'your location')
     return (
-        f"Hi {booking_data.get('customer_name', 'there')}, your Rim Repair booking is confirmed for "
+        f"Hi {booking_data.get('customer_name', 'there')}, your Wheel Doctor booking is confirmed for "
         f"{date} at {address}. Our technician will come to you — you'll receive a reminder on the morning of your appointment with your time window. "
-        f"Payment is by EFTPOS on the day. Any questions, just reply. - Rim Repair"
+        f"Payment is by EFTPOS on the day. Any questions, just reply. - Wheel Doctor"
     )
 
 def send_confirmation_email(to_email, booking_data, booking_id=None, thread_id=None):
@@ -613,7 +613,7 @@ def send_confirmation_email(to_email, booking_data, booking_id=None, thread_id=N
             booking_data.get('vehicle_make'),
             booking_data.get('vehicle_model'),
         ])) or 'your vehicle')
-        service_type = booking_data.get('service_type', 'rim repair').replace('_', ' ').title()
+        service_type = booking_data.get('service_type', 'wheel repair').replace('_', ' ').title()
         num_rims = booking_data.get('num_rims')
         if num_rims:
             service_type += f' \u00d7{num_rims} rims'
@@ -656,7 +656,7 @@ def send_confirmation_email(to_email, booking_data, booking_id=None, thread_id=N
                  f'color:{DARK};')
             + reschedule_para
             + f'<p style="margin:24px 0 0;color:{DARK};font-size:15px;">'
-              f'Kind regards,<br><strong style="color:#C41230;">Rim Repair Team</strong></p>'
+              f'Kind regards,<br><strong style="color:#C41230;">Wheel Doctor Team</strong></p>'
         )
 
         ref = f' #{booking_id}' if booking_id else ''
@@ -680,10 +680,10 @@ def send_decline_email(to_email, booking_data, thread_id=None):
                  'with your availability and we\'ll do our best to get you booked in as soon as possible.')
             + _p('We apologise for any inconvenience and look forward to hearing from you.')
             + f'<p style="margin:24px 0 0;color:{DARK};font-size:15px;">'
-              f'Kind regards,<br><strong style="color:#C41230;">Rim Repair Team</strong></p>'
+              f'Kind regards,<br><strong style="color:#C41230;">Wheel Doctor Team</strong></p>'
         )
 
-        send_customer_email(service, to_email, 'Re: Your Rim Repair Enquiry', content, thread_id=thread_id)
+        send_customer_email(service, to_email, 'Re: Your Wheel Doctor Enquiry', content, thread_id=thread_id)
     except Exception as e:
         logger.error(f"Decline email send error: {e}")
 
@@ -711,7 +711,7 @@ def send_reschedule_change_email(to_email, booking_data, booking_id, old_date, t
             booking_data.get('vehicle_make'),
             booking_data.get('vehicle_model'),
         ])) or 'your vehicle')
-        service_type = booking_data.get('service_type', 'rim repair').replace('_', ' ').title()
+        service_type = booking_data.get('service_type', 'wheel repair').replace('_', ' ').title()
         num_rims = booking_data.get('num_rims')
         if num_rims:
             service_type += f' \u00d7{num_rims} rims'
@@ -751,7 +751,7 @@ def send_reschedule_change_email(to_email, booking_data, booking_id, old_date, t
             + reschedule_para
             + _p('If you have any questions, simply reply to this email.')
             + f'<p style="margin:24px 0 0;color:{DARK};font-size:15px;">'
-              f'Kind regards,<br><strong style="color:{RED};">Rim Repair Team</strong></p>'
+              f'Kind regards,<br><strong style="color:{RED};">Wheel Doctor Team</strong></p>'
         )
 
         ref = f' #{booking_id}' if booking_id else ''

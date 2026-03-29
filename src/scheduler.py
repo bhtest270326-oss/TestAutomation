@@ -188,7 +188,7 @@ def _alert_owner_overrun(date_str, overrun_jobs):
     msg = (
         f"SCHEDULE OVERRUN on {date_str}: {len(overrun_jobs)} job(s) "
         f"({names}) — last job starts {last_time}, may finish after 5pm. "
-        f"Please review and reschedule. - Rim Repair System"
+        f"Please review and reschedule. - Wheel Doctor System"
     )
     try:
         result = send_sms(owner_phone, msg)
@@ -466,12 +466,12 @@ def _send_morning_email(to_email, booking_data, thread_id=None):
                  'simply reply to this email.')
             + f'<p style="margin:24px 0 0;color:{DARK};font-size:15px;">'
               f'We look forward to seeing you today!<br><br>'
-              f'Kind regards,<br><strong style="color:#C41230;">Rim Repair Team</strong></p>'
+              f'Kind regards,<br><strong style="color:#C41230;">Wheel Doctor Team</strong></p>'
         )
 
         send_customer_email(
             service, to_email,
-            'Your Rim Repair Technician is on the Way Today',
+            'Your Wheel Doctor Technician is on the Way Today',
             content,
             thread_id=thread_id,
         )
@@ -511,10 +511,10 @@ def send_day_prior_reminders():
         address = booking_data.get('address') or booking_data.get('suburb', 'your location')
 
         msg = (
-            f"Hi {name}, just a reminder that your Rim Repair booking is scheduled for tomorrow "
+            f"Hi {name}, just a reminder that your Wheel Doctor booking is scheduled for tomorrow "
             f"at {time_str} at {address}. "
             f"Payment is by EFTPOS on the day. "
-            f"For any changes, please reply to this message. - Rim Repair Team"
+            f"For any changes, please reply to this message. - Wheel Doctor Team"
         )
 
         send_sms(customer_phone, msg)
@@ -561,16 +561,16 @@ def send_post_job_review_requests():
 
         if GOOGLE_REVIEW_LINK:
             msg = (
-                f"Hi {name}, thanks for choosing Rim Repair today! "
+                f"Hi {name}, thanks for choosing Wheel Doctor today! "
                 f"We hope you're happy with the result. "
                 f"If you have a moment, a Google review would mean a lot to us: {GOOGLE_REVIEW_LINK} "
-                f"- Rim Repair Team"
+                f"- Wheel Doctor Team"
             )
         else:
             msg = (
-                f"Hi {name}, thanks for choosing Rim Repair today! "
+                f"Hi {name}, thanks for choosing Wheel Doctor today! "
                 f"We hope you're happy with the result. "
-                f"Feel free to refer us to anyone who needs rim repairs. - Rim Repair Team"
+                f"Feel free to refer us to anyone who needs wheel repairs. - Wheel Doctor Team"
             )
 
         send_sms(customer_phone, msg)
@@ -685,7 +685,7 @@ def send_owner_daily_briefing():
     msg = (
         f"Today: {len(jobs)} job(s). "
         f"First at {first_time} ({first_suburb}). "
-        f"Est. finish ~{finish_time}. - Rim Repair"
+        f"Est. finish ~{finish_time}. - Wheel Doctor"
     )
 
     try:
@@ -720,7 +720,7 @@ def check_dlq_for_escalation():
             f"ALERT: {len(unnotified)} booking enquiry(ies) failed AI extraction 3+ times "
             f"and were NOT sent to customers:\n\n{dlq_lines}\n\n"
             f"These customers' emails need manual follow-up. Check Railway logs for details.\n"
-            f"- Rim Repair System"
+            f"- Wheel Doctor System"
         )
         from email.mime.text import MIMEText
         import base64
@@ -830,16 +830,16 @@ def send_maintenance_reminders():
                     state.mark_maintenance_reminder_sent(row['id'], interval)
                     continue
                 vehicle = row.get('vehicle_key', '').replace('_', ' ').title() or 'your vehicle'
-                service = (row.get('service_type') or 'rim repair').replace('_', ' ')
+                service = (row.get('service_type') or 'wheel repair').replace('_', ' ')
                 if interval == '6m':
                     msg = (
                         f"Hi, it's been 6 months since your {service} on {vehicle}. "
-                        f"Time for a check-up? We're here when you need us. - Rim Repair Team"
+                        f"Time for a check-up? We're here when you need us. - Wheel Doctor Team"
                     )
                 else:
                     msg = (
                         f"Hi, it's been a year since your {service} on {vehicle}. "
-                        f"Keep it looking its best — reply to book your next service. - Rim Repair Team"
+                        f"Keep it looking its best — reply to book your next service. - Wheel Doctor Team"
                     )
                 try:
                     # Mark BEFORE sending so a crash between send and mark never causes a duplicate SMS
@@ -875,7 +875,7 @@ def backup_database_to_email():
         service = get_gmail_service()
         msg = MIMEMultipart()
         msg['to'] = os.environ.get('OWNER_EMAIL', '')
-        msg['subject'] = f"Rim Repair DB Backup — {today}"
+        msg['subject'] = f"Wheel Doctor DB Backup — {today}"
 
         with open(DB_PATH, 'rb') as f:
             part = MIMEBase('application', 'octet-stream')
@@ -943,7 +943,7 @@ def check_waitlist_opportunities():
                              'and we\'ll get you confirmed as soon as possible.')
                         + _p('Availability is limited, so please reply promptly to secure your spot.')
                         + f'<p style="margin:24px 0 0;color:{DARK};font-size:15px;">'
-                          f'Kind regards,<br><strong style="color:{RED};">Rim Repair Team</strong></p>'
+                          f'Kind regards,<br><strong style="color:{RED};">Wheel Doctor Team</strong></p>'
                     )
 
                     send_customer_email(

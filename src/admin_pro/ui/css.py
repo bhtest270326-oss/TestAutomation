@@ -1678,7 +1678,7 @@ body.ap-body {
 }
 
 .ap-today-job-card:hover {
-  background: rgba(59,130,246,0.1);
+  background: rgba(200,16,46,0.1);
   border-color: var(--ap-border-light);
 }
 
@@ -1897,7 +1897,7 @@ body.ap-body {
 
 .ap-funnel-bar {
   height: 28px;
-  background: linear-gradient(90deg, var(--ap-accent) 0%, rgba(59,130,246,0.3) 100%);
+  background: linear-gradient(90deg, var(--ap-accent) 0%, rgba(200,16,46,0.3) 100%);
   border-radius: 4px;
   min-width: 20px;
   transition: width 600ms ease;
@@ -2234,11 +2234,11 @@ body.ap-body {
 }
 
 .ap-calendar-day:hover {
-  background: rgba(59,130,246,0.12);
+  background: rgba(200,16,46,0.12);
 }
 
 .ap-calendar-day.today {
-  background: rgba(59,130,246,0.22);
+  background: rgba(200,16,46,0.18);
   outline: 2px solid var(--ap-accent);
   outline-offset: -2px;
   color: var(--ap-accent);
@@ -2267,7 +2267,7 @@ body.ap-body {
 }
 
 .ap-calendar-day.selected {
-  background: rgba(59,130,246,0.25);
+  background: rgba(200,16,46,0.22);
   outline: 2px solid var(--ap-accent);
   outline-offset: -2px;
   color: var(--ap-text);
@@ -2354,7 +2354,7 @@ body.ap-body {
 .ap-spinner {
   width: 32px;
   height: 32px;
-  border: 3px solid rgba(59,130,246,0.2);
+  border: 3px solid rgba(200,16,46,0.2);
   border-top-color: var(--ap-accent);
   border-radius: 50%;
   animation: ap-spin 600ms linear infinite;

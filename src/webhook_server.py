@@ -377,7 +377,7 @@ def create_app():
                 if owner_mobile:
                     cust_name = (bd.get('customer_name') or 'Customer')
                     send_sms(owner_mobile,
-                        f"Booking {booking_id} rescheduled by customer from {old_date} to {new_date} ({cust_name}). - Rim Repair System")
+                        f"Booking {booking_id} rescheduled by customer from {old_date} to {new_date} ({cust_name}). - Wheel Doctor System")
             except Exception as e:
                 logger.warning(f"Owner reschedule SMS failed: {e}")
 
@@ -424,7 +424,7 @@ def create_app():
                  'If you have any questions, please reply to your original booking email.')
             + reschedule_again_para
             + f'<p style="margin:24px 0 0;color:{DARK};font-size:15px;">'
-              f'Kind regards,<br><strong style="color:{RED};">Rim Repair Team</strong></p>'
+              f'Kind regards,<br><strong style="color:{RED};">Wheel Doctor Team</strong></p>'
         )
 
         return build_email_html(page_content)

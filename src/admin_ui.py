@@ -175,7 +175,7 @@ def _render_dashboard(flags: dict, pending: list = None) -> str:
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Rim Repair — Control Panel</title>
+  <title>Wheel Doctor — Control Panel</title>
   <style>
     *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
     body {{
@@ -321,7 +321,7 @@ def _render_dashboard(flags: dict, pending: list = None) -> str:
   </style>
 </head>
 <body>
-  <h1>&#9881; Rim Repair Control Panel</h1>
+  <h1>&#9881; Wheel Doctor Control Panel</h1>
   <p class="sub">Tap a button to switch a feature on or off — takes effect immediately</p>
 
   <div class="section-label">Analytics</div>
@@ -814,7 +814,7 @@ def api_booking_decline_with_reason(booking_id):
                 name = (bd.get('customer_name') or 'there').split()[0]
                 send_sms(customer_phone,
                     f"Hi {name}, unfortunately we're unable to accommodate your booking request "
-                    f"at this time. Please contact us if you'd like to discuss alternatives. - Rim Repair Team")
+                    f"at this time. Please contact us if you'd like to discuss alternatives. - Wheel Doctor Team")
             except Exception as e:
                 logger.warning(f"Could not SMS customer on decline: {e}")
 

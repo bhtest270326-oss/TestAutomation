@@ -624,7 +624,7 @@ def _send_date_full_email(service, to_email: str, subject: str, requested_date: 
             + fields_section
             + '<p>Payment is by EFTPOS on the day of the appointment. '
             'We look forward to hearing from you!</p>'
-            '<p>Kind regards,<br><strong>Rim Repair Team</strong></p>'
+            '<p>Kind regards,<br><strong>Wheel Doctor Team</strong></p>'
         )
 
         reply_subject = subject if subject.lower().startswith('re:') else f'Re: {subject}'
@@ -674,11 +674,11 @@ def handle_availability_inquiry(msg_id, thread_id, subject, body, customer_email
         elif num_rims:
             try:
                 n = int(num_rims)
-                service_description = f"{n}-rim repair"
+                service_description = f"{n}-wheel repair"
             except (ValueError, TypeError):
-                service_description = 'rim repair'
+                service_description = 'wheel repair'
         else:
-            service_description = 'rim repair'
+            service_description = 'wheel repair'
             duration = 120  # default: 1 rim / 2 hours
 
         customer_name = booking_data.get('customer_name') or 'there'
@@ -800,9 +800,9 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
                          '(Perth metropolitan area). We\'re unable to accommodate your booking at this time.')
                     + _p('We appreciate your interest and apologise for the inconvenience.')
                     + f'<p style="margin:24px 0 0;color:{DARK};font-size:15px;">'
-                      f'Kind regards,<br><strong style="color:#C41230;">Rim Repair Team</strong></p>'
+                      f'Kind regards,<br><strong style="color:#C41230;">Wheel Doctor Team</strong></p>'
                 )
-                send_customer_email(service, customer_email, 'Re: Your Rim Repair Enquiry', content,
+                send_customer_email(service, customer_email, 'Re: Your Wheel Doctor Enquiry', content,
                                     thread_id=thread_id, message_id_header=message_id_header)
             except Exception as e:
                 logger.error(f"Could not send out-of-area decline email: {e}")
@@ -903,7 +903,7 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
                 ).fetchone()
             if _hist:
                 last_date = _hist['completed_date']
-                last_svc = (_hist['service_type'] or 'rim repair').replace('_', ' ')
+                last_svc = (_hist['service_type'] or 'wheel repair').replace('_', ' ')
                 returning_note = f"Returning customer — last service: {last_date} ({last_svc})"
                 existing_notes = booking_data.get('notes') or ''
                 booking_data['notes'] = (existing_notes + '\n' + returning_note).strip()
@@ -1287,7 +1287,7 @@ def send_clarification_email(service, to_email, original_subject, missing_fields
         + _ul(missing_fields)
         + _p('Once we have this, we\'ll get your booking confirmed right away.')
         + f'<p style="margin:24px 0 0;color:{DARK};font-size:15px;">'
-          f'Kind regards,<br><strong style="color:#C41230;">Rim Repair Team</strong></p>'
+          f'Kind regards,<br><strong style="color:#C41230;">Wheel Doctor Team</strong></p>'
     )
 
     send_customer_email(service, to_email, subject, content,

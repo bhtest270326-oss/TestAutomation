@@ -340,7 +340,7 @@ function statusBadge(status) {
 // Service type → human label
 function serviceLabel(type) {
   const SERVICE_MAP = {
-    rim_repair:    'Rim Repair',
+    rim_repair:    'Wheel Doctor Service',
     paint_touchup: 'Paint Touch-up',
     paint_touch_up: 'Paint Touch-up',
     powder_coat:   'Powder Coat',

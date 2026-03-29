@@ -177,14 +177,14 @@ def _alert_owner_security(detail: str) -> None:
         send_sms(
             owner_phone,
             f"[SECURITY ALERT] Suspicious email received — possible prompt injection attempt. "
-            f"Detail: {detail[:120]}. Check logs. - Rim Repair System"
+            f"Detail: {detail[:120]}. Check logs. - Wheel Doctor System"
         )
     except Exception as e:
         logger.error(f"Could not send security alert SMS: {e}")
 
-_INTENT_PROMPT = """You are a classifier for a mobile rim repair business inbox in Perth, Western Australia.
+_INTENT_PROMPT = """You are a classifier for a mobile wheel doctor business inbox in Perth, Western Australia.
 
-Determine whether the following email is a booking request or service enquiry for rim repair, wheel repair, or paint touch-up.
+Determine whether the following email is a booking request or service enquiry for wheel repair, wheel doctor, or paint touch-up.
 
 Reply with exactly one word: YES if it is a booking/service enquiry, NO if it is not (e.g. newsletters, wrong number, spam, general questions unrelated to booking a service, supplier emails, review requests from other businesses, etc).
 
@@ -199,7 +199,7 @@ Reply YES or NO only."""
 
 
 def is_booking_request(body, subject=""):
-    """Return True if the email appears to be a rim repair booking or service enquiry."""
+    """Return True if the email appears to be a wheel doctor booking or service enquiry."""
     try:
         clean_body, suspicious = _check_for_injection(body[:2000], source='intent-check')
         if suspicious:
@@ -258,7 +258,7 @@ def is_availability_inquiry(subject: str, body: str) -> bool:
 # Clarification reply intent classifier
 # ---------------------------------------------------------------------------
 
-_CLARIFICATION_INTENT_PROMPT = """You are a classifier for a mobile rim repair booking system in Perth, Western Australia.
+_CLARIFICATION_INTENT_PROMPT = """You are a classifier for a mobile wheel doctor booking system in Perth, Western Australia.
 
 A customer is in the middle of a booking conversation where we have asked them to provide some missing details.
 They have replied. Classify their reply into exactly one of these categories:
@@ -325,7 +325,7 @@ def classify_clarification_reply(body: str, subject: str) -> str:
 BOOKING_FAQ = {
     'pricing': (
         "Our pricing depends on the number of rims and type of damage. "
-        "As a guide, single rim repairs typically start from around $120–$150. "
+        "As a guide, single wheel repairs typically start from around $120–$150. "
         "We'll give you a firm quote once we assess the damage on the day. "
         "Payment is by EFTPOS on the day of the appointment."
     ),
@@ -335,7 +335,7 @@ BOOKING_FAQ = {
         "include your suburb in your reply and we'll confirm."
     ),
     'duration': (
-        "Most single-rim repairs take approximately 1–2 hours on-site. "
+        "Most single-wheel repairs take approximately 1–2 hours on-site. "
         "Multiple rims or more complex damage may take longer. "
         "We'll let you know an estimated timeframe when we confirm your booking."
     ),
@@ -356,7 +356,7 @@ BOOKING_FAQ = {
     ),
 }
 
-_FAQ_RESPONSE_PROMPT = """You are a helpful booking assistant for a mobile rim repair business in Perth, Western Australia.
+_FAQ_RESPONSE_PROMPT = """You are a helpful booking assistant for a mobile wheel doctor business in Perth, Western Australia.
 
 A customer is in the middle of a booking enquiry. They have asked a question instead of providing their booking details.
 
@@ -439,11 +439,11 @@ def generate_faq_response(
                 if missing_items else ''
             )
             + f'<p style="color:{DARK};font-size:15px;">Kind regards,<br>'
-              f'<strong style="color:{RED};">Rim Repair Team</strong></p>'
+              f'<strong style="color:{RED};">Wheel Doctor Team</strong></p>'
         )
 
 
-_OFF_SCOPE_DRAFT_PROMPT = """You are a booking assistant for a mobile rim repair business in Perth, Western Australia.
+_OFF_SCOPE_DRAFT_PROMPT = """You are a booking assistant for a mobile wheel doctor business in Perth, Western Australia.
 
 A customer is in the middle of a booking enquiry and has sent a reply that contains an off-scope question or message.
 Draft a helpful reply on behalf of the business. The owner will review and edit this draft before sending.
@@ -455,7 +455,7 @@ Your draft should:
 4. Be professional, friendly, and concise
 
 Business context:
-- Mobile rim repair and paint touch-up service, Perth metro area
+- Mobile wheel doctor and paint touch-up service, Perth metro area
 - Technician comes to the customer's location
 - EFTPOS payment on the day
 - Bookings confirmed by the owner via SMS
@@ -542,7 +542,7 @@ def draft_off_scope_reply(
             + f'<p style="color:{DARK};font-size:15px;">Thank you for your message. '
             + f'A member of our team will be in touch shortly to assist you.</p>'
             + f'<p style="color:{DARK};font-size:15px;">Kind regards,<br>'
-            + f'<strong style="color:{RED};">Rim Repair Team</strong></p>'
+            + f'<strong style="color:{RED};">Wheel Doctor Team</strong></p>'
         )
 
 
@@ -729,13 +729,13 @@ def format_availability_response(
         f'Payment is by EFTPOS on the day of the appointment. '
         f'We look forward to hearing from you!</p>'
         f'<p style="margin:0;color:{DARK};font-size:15px;">'
-        f'Kind regards,<br><strong style="color:{RED};">Rim Repair Team</strong></p>'
+        f'Kind regards,<br><strong style="color:{RED};">Wheel Doctor Team</strong></p>'
     )
 
     return content
 
 
-EXTRACTION_PROMPT = """You are a booking assistant for a mobile rim repair business in Perth, Western Australia.
+EXTRACTION_PROMPT = """You are a booking assistant for a mobile wheel doctor business in Perth, Western Australia.
 
 Extract booking details from the customer message below. Today's date is {today}.
 
@@ -779,7 +779,7 @@ For preferred_date and alternative_dates:
 {message}
 </customer_message>"""
 
-CORRECTION_PROMPT = """You are a booking assistant for a mobile rim repair business in Perth, Western Australia.
+CORRECTION_PROMPT = """You are a booking assistant for a mobile wheel doctor business in Perth, Western Australia.
 
 The business owner has sent an instruction about a pending booking. Today's date is {today}.
 

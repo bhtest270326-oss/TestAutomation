@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 SHEETS_SHARE_EMAIL = os.environ.get('SHEETS_SHARE_EMAIL', os.environ.get('OWNER_EMAIL', ''))
-SPREADSHEET_TITLE = 'Rim Repair Bookings'
+SPREADSHEET_TITLE = 'Wheel Doctor Bookings'
 SPREADSHEET_ID_KEY = 'google_sheets_spreadsheet_id'
 
 SHEET_HEADERS = [
@@ -73,7 +73,7 @@ def _get_or_create_spreadsheet(sheets_svc, drive_svc, state) -> str:
             fileId=spreadsheet_id,
             body={'type': 'user', 'role': 'writer', 'emailAddress': SHEETS_SHARE_EMAIL},
             sendNotificationEmail=True,
-            emailMessage=f"Your Rim Repair booking log spreadsheet is ready."
+            emailMessage=f"Your Wheel Doctor booking log spreadsheet is ready."
         ).execute()
         logger.info(f"Shared spreadsheet with {SHEETS_SHARE_EMAIL}")
     except Exception as e:
@@ -86,7 +86,7 @@ def _get_or_create_spreadsheet(sheets_svc, drive_svc, state) -> str:
 
 def append_booking_row(booking_id: str, booking: dict):
     """
-    Append a row to the Rim Repair Bookings sheet for a confirmed booking.
+    Append a row to the Wheel Doctor Bookings sheet for a confirmed booking.
 
     Args:
         booking_id: The booking ID string (e.g. 'A1B2C3D4')

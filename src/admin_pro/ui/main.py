@@ -20,7 +20,7 @@ def _build_html():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Perth S&amp;E Auto — Control Pro</title>
+<title>Wheel Doctor — Control Pro</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
 {CSS}
