@@ -14,8 +14,10 @@ import json
 import base64
 import logging
 import time
+import uuid
 import collections
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, g
+from trace_context import set_trace_id, set_span
 
 logger = logging.getLogger(__name__)
 
@@ -96,36 +98,18 @@ def create_app():
     else:
         logger.info("Pub/Sub JWT verification: DISABLED (PUBSUB_AUDIENCE not set — local dev mode)")
 
-    # ------------------------------------------------------------------
-    # Request logging middleware
-    # ------------------------------------------------------------------
-    _req_logger = logging.getLogger('request_logger')
-
     @app.before_request
-    def _log_request_start():
-        request._start_time = time.monotonic()
-        _req_logger.info(
-            "request_start",
-            extra={
-                "method": request.method,
-                "path": request.path,
-                "content_length": request.content_length,
-            },
-        )
+    def _assign_request_trace_id():
+        """Generate or propagate a unique request/trace ID for every request."""
+        req_id = request.headers.get('X-Request-ID') or str(uuid.uuid4())
+        g.request_id = req_id
+        set_trace_id(req_id)
+        set_span(None)
 
     @app.after_request
-    def _log_request_end(response):
-        start = getattr(request, '_start_time', None)
-        duration_ms = round((time.monotonic() - start) * 1000, 2) if start else None
-        _req_logger.info(
-            "request_end",
-            extra={
-                "method": request.method,
-                "path": request.path,
-                "status_code": response.status_code,
-                "duration_ms": duration_ms,
-            },
-        )
+    def _inject_request_id_header(response):
+        """Return the request ID in the response so callers can correlate."""
+        response.headers['X-Request-ID'] = getattr(g, 'request_id', '')
         return response
 
     from admin_ui import admin_bp
