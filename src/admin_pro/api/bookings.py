@@ -358,6 +358,32 @@ def register(bp, require_auth):
             if not success:
                 return jsonify({'ok': False, 'error': 'Could not confirm booking (possible time conflict or state error)'}), 409
 
+            # ── Google Calendar sync: create or convert event ──
+            calendar_event_id = None
+            try:
+                with _get_conn() as conn:
+                    eid_row = conn.execute(
+                        "SELECT calendar_event_id FROM bookings WHERE id=?",
+                        (booking_id,)
+                    ).fetchone()
+                existing_event_id = eid_row['calendar_event_id'] if eid_row else None
+
+                if existing_event_id:
+                    # Convert tentative [PENDING] event to confirmed
+                    from calendar_handler import confirm_tentative_event
+                    confirm_tentative_event(existing_event_id, booking_data)
+                    calendar_event_id = existing_event_id
+                    logger.info("Admin confirm: converted tentative calendar event %s", existing_event_id)
+                else:
+                    # Create a new confirmed calendar event
+                    from calendar_handler import create_calendar_event
+                    calendar_event_id = create_calendar_event(booking_data)
+                    if calendar_event_id:
+                        state.update_booking_calendar_event(booking_id, calendar_event_id)
+                        logger.info("Admin confirm: created calendar event %s for booking %s", calendar_event_id, booking_id)
+            except Exception:
+                logger.exception("Admin confirm: calendar sync failed for booking %s (non-blocking)", booking_id)
+
             # Notify customer (SMS and/or email) now that the booking is confirmed
             customer_email = row['customer_email'] or booking_data.get('customer_email')
             thread_id = row['thread_id']
@@ -370,6 +396,7 @@ def register(bp, require_auth):
                     'triggered_by': 'admin_dashboard',
                     'customer_notified_sms': notif['sms_sent'],
                     'customer_notified_email': notif['email_sent'],
+                    'calendar_event_id': calendar_event_id,
                 }
             )
             logger.info("Admin confirmed booking %s (sms=%s email=%s)", booking_id, notif['sms_sent'], notif['email_sent'])
@@ -404,6 +431,21 @@ def register(bp, require_auth):
                     'ok': False,
                     'error': f"Booking is in '{row['status']}' state, not awaiting_owner"
                 }), 409
+
+            # ── Delete tentative calendar event before declining ──
+            try:
+                with _get_conn() as conn:
+                    eid_row = conn.execute(
+                        "SELECT calendar_event_id FROM bookings WHERE id=?",
+                        (booking_id,)
+                    ).fetchone()
+                existing_event_id = eid_row['calendar_event_id'] if eid_row else None
+                if existing_event_id:
+                    from calendar_handler import delete_calendar_event
+                    delete_calendar_event(existing_event_id)
+                    logger.info("Admin decline: deleted calendar event %s for booking %s", existing_event_id, booking_id)
+            except Exception:
+                logger.exception("Admin decline: calendar delete failed for booking %s (non-blocking)", booking_id)
 
             success = state.decline_booking(booking_id)
             if not success:
@@ -473,6 +515,48 @@ def register(bp, require_auth):
                             booking_id,
                         )
                     )
+
+            # ── Google Calendar sync: update event if date/time changed ──
+            date_or_time_changed = 'preferred_date' in body or 'preferred_time' in body
+            if date_or_time_changed:
+                try:
+                    with _get_conn() as conn:
+                        eid_row = conn.execute(
+                            "SELECT calendar_event_id FROM bookings WHERE id=?",
+                            (booking_id,)
+                        ).fetchone()
+                    event_id = eid_row['calendar_event_id'] if eid_row else None
+
+                    new_date = merged.get('preferred_date', '')
+                    new_time = merged.get('preferred_time', '')
+
+                    if event_id and new_date and new_time:
+                        from calendar_handler import update_calendar_event_time
+                        from maps_handler import get_job_duration_minutes
+
+                        # Parse new start time
+                        time_str = new_time.strip().upper()
+                        # Handle "HH:MM AM/PM" and "HH:MM" formats
+                        for fmt in ('%Y-%m-%d %I:%M %p', '%Y-%m-%d %H:%M'):
+                            try:
+                                start_dt = datetime.strptime(
+                                    new_date + ' ' + time_str, fmt
+                                )
+                                break
+                            except ValueError:
+                                continue
+                        else:
+                            # Fallback: try just the date with 9am default
+                            start_dt = datetime.strptime(new_date, '%Y-%m-%d').replace(hour=9)
+
+                        duration = get_job_duration_minutes(merged)
+                        update_calendar_event_time(event_id, start_dt, duration)
+                        logger.info("Admin edit: updated calendar event %s to %s %s", event_id, new_date, new_time)
+                    elif event_id and not new_date:
+                        # Date cleared (dragged back to pending) — leave calendar event as-is
+                        logger.info("Admin edit: date cleared for booking %s, calendar event %s preserved", booking_id, event_id)
+                except Exception:
+                    logger.exception("Admin edit: calendar sync failed for booking %s (non-blocking)", booking_id)
 
             state.log_booking_event(
                 booking_id, 'data_updated', actor='owner_ui',
