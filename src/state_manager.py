@@ -1,17 +1,142 @@
 import json
 import os
+import re
 import uuid
 import sqlite3
 import logging
+import threading
 from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
 _STATE_FILE_JSON = os.environ.get('STATE_FILE', '/data/booking_state.json')
 DB_PATH = os.path.splitext(_STATE_FILE_JSON)[0] + '.db'
+DATABASE_URL = os.environ.get('DATABASE_URL')
+
+# ------------------------------------------------------------------ #
+# PostgreSQL connection pool (simple: one connection per thread,      #
+# reconnect on failure)                                                #
+# ------------------------------------------------------------------ #
+_pg_local = threading.local()
+
+
+def _is_postgres():
+    """Return True when DATABASE_URL is set (use PostgreSQL)."""
+    return bool(DATABASE_URL)
+
+
+def _q(sql):
+    """Adapt a SQL string from SQLite dialect to PostgreSQL when needed.
+
+    When running against SQLite the string is returned unchanged.
+    Handles: placeholders, AUTOINCREMENT, DATETIME, INSERT OR IGNORE,
+    INSERT OR REPLACE, and PRAGMA statements.
+    """
+    if not _is_postgres():
+        return sql
+
+    s = sql
+
+    # Skip SQLite-only PRAGMA statements entirely
+    if re.match(r'\s*PRAGMA\b', s, re.IGNORECASE):
+        return ''
+
+    # Placeholders: ? → %s  (but not inside quoted strings)
+    s = s.replace('?', '%s')
+
+    # AUTOINCREMENT → SERIAL
+    s = re.sub(
+        r'INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT',
+        'SERIAL PRIMARY KEY',
+        s,
+        flags=re.IGNORECASE,
+    )
+
+    # DATETIME DEFAULT CURRENT_TIMESTAMP → TIMESTAMP DEFAULT NOW()
+    s = re.sub(
+        r'DATETIME\s+DEFAULT\s+CURRENT_TIMESTAMP',
+        'TIMESTAMP DEFAULT NOW()',
+        s,
+        flags=re.IGNORECASE,
+    )
+
+    # INSERT OR IGNORE → INSERT INTO ... ON CONFLICT DO NOTHING
+    had_or_ignore = bool(re.search(r'INSERT\s+OR\s+IGNORE\s+INTO', s, re.IGNORECASE))
+    if had_or_ignore:
+        s = re.sub(
+            r'INSERT\s+OR\s+IGNORE\s+INTO',
+            'INSERT INTO',
+            s,
+            flags=re.IGNORECASE,
+        )
+        s = s.rstrip().rstrip(';')
+        s += ' ON CONFLICT DO NOTHING'
+
+    # INSERT OR REPLACE → INSERT INTO ... ON CONFLICT (<pk>) DO UPDATE SET ...
+    had_or_replace = bool(re.search(r'INSERT\s+OR\s+REPLACE\s+INTO', s, re.IGNORECASE))
+    if had_or_replace:
+        s = re.sub(
+            r'INSERT\s+OR\s+REPLACE\s+INTO',
+            'INSERT INTO',
+            s,
+            flags=re.IGNORECASE,
+        )
+        # Extract column list between first (...) before VALUES
+        m = re.search(r'\(([^)]+)\)\s*VALUES', s, re.IGNORECASE)
+        if m:
+            cols = [c.strip() for c in m.group(1).split(',')]
+            pk = cols[0]  # first column is the primary key
+            update_cols = [c for c in cols if c != pk]
+            set_clause = ', '.join(f'{c} = EXCLUDED.{c}' for c in update_cols)
+            s = s.rstrip().rstrip(';')
+            s += f' ON CONFLICT ({pk}) DO UPDATE SET {set_clause}'
+
+    return s
+
+
+class _PgRowDict(dict):
+    """Minimal dict wrapper that supports row['col'] access like sqlite3.Row."""
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return list(self.values())[key]
+        return super().__getitem__(key)
+
+
+def _pg_cursor_to_rows(cursor):
+    """Convert psycopg2 cursor results to list of dict-like objects."""
+    if cursor.description is None:
+        return []
+    cols = [d[0] for d in cursor.description]
+    return [_PgRowDict(zip(cols, row)) for row in cursor.fetchall()]
+
+
+def _get_pg_conn():
+    """Return a psycopg2 connection, reusing per-thread or reconnecting."""
+    conn = getattr(_pg_local, 'conn', None)
+    if conn is not None:
+        try:
+            conn.cursor().execute('SELECT 1')
+            return conn
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            _pg_local.conn = None
+
+    import psycopg2
+    import psycopg2.extras
+    conn = psycopg2.connect(DATABASE_URL)
+    conn.autocommit = True
+    _pg_local.conn = conn
+    return conn
 
 
 def _get_conn():
+    """Return a database connection (SQLite or PostgreSQL)."""
+    if _is_postgres():
+        return _PgConnectionWrapper(_get_pg_conn())
+
     db_dir = os.path.dirname(DB_PATH)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
@@ -22,8 +147,141 @@ def _get_conn():
     return conn
 
 
+class _PgConnectionWrapper:
+    """Wraps a psycopg2 connection to provide a sqlite3-like interface.
+
+    Supports execute(), executescript(), fetchone(), fetchall(), commit(),
+    close(), and context-manager (with) usage.
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+        self._in_transaction = False
+
+    def execute(self, sql, params=None):
+        translated = _q(sql)
+
+        # Skip empty statements (e.g. PRAGMAs stripped for PG)
+        if not translated or not translated.strip():
+            return _PgCursorWrapper(None)
+
+        # Map SQLite transaction control to PostgreSQL equivalents
+        upper = translated.strip().upper()
+        if upper.startswith('BEGIN'):
+            self._conn.autocommit = False
+            self._in_transaction = True
+            return _PgCursorWrapper(None)
+        if upper == 'COMMIT':
+            self._conn.commit()
+            self._conn.autocommit = True
+            self._in_transaction = False
+            return _PgCursorWrapper(None)
+        if upper == 'ROLLBACK':
+            self._conn.rollback()
+            self._conn.autocommit = True
+            self._in_transaction = False
+            return _PgCursorWrapper(None)
+
+        cur = self._conn.cursor()
+        try:
+            cur.execute(translated, params or ())
+        except Exception:
+            if not self._in_transaction:
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    pass
+            raise
+        return _PgCursorWrapper(cur)
+
+    def executescript(self, sql):
+        """Execute multiple SQL statements (used by _ensure_schema).
+
+        Translates each statement individually.
+        """
+        # Split on semicolons, filter blanks
+        stmts = [s.strip() for s in sql.split(';') if s.strip()]
+        cur = self._conn.cursor()
+        for stmt in stmts:
+            translated = _q(stmt)
+            if translated:
+                try:
+                    cur.execute(translated)
+                except Exception as e:
+                    # For CREATE TABLE/INDEX IF NOT EXISTS, swallow "already exists"
+                    err = str(e).lower()
+                    if 'already exists' in err:
+                        self._conn.rollback()
+                        continue
+                    raise
+        return _PgCursorWrapper(cur)
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        # Don't actually close — we reuse the connection
+        pass
+
+    @property
+    def rowcount(self):
+        return None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type:
+            try:
+                self._conn.rollback()
+            except Exception:
+                pass
+        else:
+            try:
+                self._conn.commit()
+            except Exception:
+                pass
+        return False
+
+
+class _PgCursorWrapper:
+    """Wraps psycopg2 cursor to provide sqlite3-like fetchone/fetchall."""
+
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    @property
+    def lastrowid(self):
+        if self._cursor is None:
+            return None
+        try:
+            return self._cursor.fetchone()[0]
+        except Exception:
+            return None
+
+    @property
+    def rowcount(self):
+        if self._cursor is None:
+            return 0
+        return self._cursor.rowcount
+
+    def fetchone(self):
+        if self._cursor is None or self._cursor.description is None:
+            return None
+        row = self._cursor.fetchone()
+        if row is None:
+            return None
+        cols = [d[0] for d in self._cursor.description]
+        return _PgRowDict(zip(cols, row))
+
+    def fetchall(self):
+        if self._cursor is None:
+            return []
+        return _pg_cursor_to_rows(self._cursor)
+
+
 def _ensure_schema(conn):
-    conn.executescript("""
+    schema_sql = """
         CREATE TABLE IF NOT EXISTS bookings (
             id              TEXT PRIMARY KEY,
             status          TEXT NOT NULL DEFAULT 'awaiting_owner',
@@ -142,20 +400,8 @@ def _ensure_schema(conn):
             sent_at     TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_msgqueue_status ON message_queue(status, created_at);
-
-        CREATE INDEX IF NOT EXISTS idx_customer_email ON bookings(customer_email);
-
-        CREATE TABLE IF NOT EXISTS schema_version (
-            version     INTEGER PRIMARY KEY,
-            applied_at  TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS holidays (
-            date        TEXT PRIMARY KEY,
-            name        TEXT NOT NULL,
-            region      TEXT NOT NULL DEFAULT 'WA'
-        );
-    """)
+    """
+    conn.executescript(schema_sql)
     conn.commit()
 
     # Column migrations — handle tables created before new columns were added.
@@ -172,8 +418,9 @@ def _ensure_schema(conn):
         try:
             conn.execute(sql)
             conn.commit()
-        except sqlite3.OperationalError as e:
-            if 'duplicate column name' not in str(e) and 'already exists' not in str(e):
+        except Exception as e:
+            err_msg = str(e).lower()
+            if 'duplicate column name' not in err_msg and 'already exists' not in err_msg:
                 raise
 
     # Migration: UNIQUE index on clarifications.thread_id
@@ -181,52 +428,6 @@ def _ensure_schema(conn):
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_clarifications_thread_unique ON clarifications(thread_id)")
     except Exception as _e:
         logger.debug("idx_clarifications_thread_unique not created (may already exist): %s", _e)
-
-    # Run numbered schema migrations
-    _run_schema_migrations(conn)
-
-
-# ---------------------------------------------------------------------------
-# Schema versioning / migrations
-# ---------------------------------------------------------------------------
-
-# Each migration is a (version, description, sql_list) tuple.
-# Migrations are applied in order and only once. Version 1 represents the
-# baseline schema created by _ensure_schema above.
-_SCHEMA_MIGRATIONS: list[tuple[int, str, list[str]]] = [
-    (1, 'baseline schema', []),
-    # Future migrations go here, e.g.:
-    # (2, 'add foo column', ["ALTER TABLE bookings ADD COLUMN foo TEXT"]),
-]
-
-
-def _get_schema_version(conn) -> int:
-    """Return the current schema version, or 0 if no migrations have been applied."""
-    try:
-        row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
-        return row['v'] if row and row['v'] is not None else 0
-    except Exception:
-        return 0
-
-
-def _run_schema_migrations(conn) -> None:
-    """Apply any pending schema migrations."""
-    current = _get_schema_version(conn)
-    for version, description, sql_list in _SCHEMA_MIGRATIONS:
-        if version <= current:
-            continue
-        try:
-            for sql in sql_list:
-                conn.execute(sql)
-            conn.execute(
-                "INSERT INTO schema_version(version, applied_at) VALUES (?, ?)",
-                (version, datetime.now(timezone.utc).isoformat())
-            )
-            conn.commit()
-            logger.info("Applied schema migration v%d: %s", version, description)
-        except Exception as e:
-            logger.error("Schema migration v%d failed: %s", version, e)
-            raise
 
 
 def _migrate_from_json(conn):
@@ -364,13 +565,10 @@ def _check_time_conflict(conn, preferred_date: str, preferred_time: str,
 
 
 VALID_TRANSITIONS = {
-    'awaiting_owner': {'confirmed', 'declined', 'expired', 'cancelled'},
-    'confirmed': {'cancelled', 'completed', 'rescheduled'},
+    'awaiting_owner': {'confirmed', 'declined'},
+    'confirmed': {'cancelled'},
     'declined': set(),
     'cancelled': set(),
-    'completed': set(),
-    'expired': set(),
-    'rescheduled': set(),
 }
 
 
@@ -533,66 +731,6 @@ class StateManager:
                 logger.warning(f"decline_booking: {pending_id} not in awaiting_owner state")
                 return False
         self.log_booking_event(pending_id, 'declined', actor='system')
-        return True
-
-    def complete_booking(self, booking_id: str) -> bool:
-        """Mark a confirmed booking as completed."""
-        with self._conn() as conn:
-            try:
-                conn.execute("BEGIN IMMEDIATE")
-                row = conn.execute(
-                    "SELECT id, status FROM bookings WHERE id=?", (booking_id,)
-                ).fetchone()
-                if not row:
-                    conn.execute("ROLLBACK")
-                    return False
-                self._assert_transition(row['status'], 'completed')
-                result = conn.execute(
-                    "UPDATE bookings SET status='completed' WHERE id=?",
-                    (booking_id,)
-                )
-                if result.rowcount == 0:
-                    conn.execute("ROLLBACK")
-                    return False
-                conn.execute("COMMIT")
-            except Exception:
-                try:
-                    conn.execute("ROLLBACK")
-                except Exception:
-                    pass
-                raise
-        self.log_booking_event(booking_id, 'completed', actor='system')
-        logger.info("Booking %s marked as completed", booking_id)
-        return True
-
-    def expire_booking(self, booking_id: str) -> bool:
-        """Mark an awaiting_owner booking as expired (no owner response in time)."""
-        with self._conn() as conn:
-            try:
-                conn.execute("BEGIN IMMEDIATE")
-                row = conn.execute(
-                    "SELECT id, status FROM bookings WHERE id=?", (booking_id,)
-                ).fetchone()
-                if not row:
-                    conn.execute("ROLLBACK")
-                    return False
-                self._assert_transition(row['status'], 'expired')
-                result = conn.execute(
-                    "UPDATE bookings SET status='expired' WHERE id=?",
-                    (booking_id,)
-                )
-                if result.rowcount == 0:
-                    conn.execute("ROLLBACK")
-                    return False
-                conn.execute("COMMIT")
-            except Exception:
-                try:
-                    conn.execute("ROLLBACK")
-                except Exception:
-                    pass
-                raise
-        self.log_booking_event(booking_id, 'expired', actor='scheduler')
-        logger.info("Booking %s marked as expired", booking_id)
         return True
 
     def update_confirmed_booking_data(self, booking_id, booking_data):
@@ -811,7 +949,11 @@ class StateManager:
                     cid, json.dumps(booking_data), customer_email, thread_id, msg_id,
                     json.dumps(missing_fields), datetime.now(timezone.utc).isoformat()
                 ))
-            except sqlite3.IntegrityError:
+            except Exception as _ie:
+                if 'integrity' not in str(type(_ie).__name__).lower() and \
+                   'unique' not in str(_ie).lower() and \
+                   'duplicate' not in str(_ie).lower():
+                    raise
                 logger.warning(f"create_pending_clarification: IntegrityError for thread_id={thread_id!r} — duplicate insert skipped")
                 existing2 = conn.execute(
                     "SELECT id FROM clarifications WHERE thread_id=?", (thread_id,)
@@ -1089,22 +1231,6 @@ class StateManager:
     # Internal conversion
     # ------------------------------------------------------------------
 
-    def get_db_holidays(self) -> set:
-        """Return a set of datetime.date objects from the holidays table."""
-        import datetime as _dt
-        result = set()
-        try:
-            with self._conn() as conn:
-                rows = conn.execute("SELECT date FROM holidays").fetchall()
-            for row in rows:
-                try:
-                    result.add(_dt.date.fromisoformat(row['date']))
-                except (ValueError, TypeError):
-                    pass
-        except Exception as e:
-            logger.debug("get_db_holidays failed (table may not exist): %s", e)
-        return result
-
     def _booking_row_to_dict(self, row):
         if not row:
             return None
@@ -1122,13 +1248,18 @@ class StateManager:
         """Add a message to the outbound queue. Returns the new row id."""
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
+        sql = """INSERT INTO message_queue(channel, recipient, subject, body, booking_id, status, created_at)
+                   VALUES (?, ?, ?, ?, ?, 'pending', ?)"""
+        if _is_postgres():
+            sql += ' RETURNING id'
         with _get_conn() as conn:
-            cur = conn.execute(
-                """INSERT INTO message_queue(channel, recipient, subject, body, booking_id, status, created_at)
-                   VALUES (?, ?, ?, ?, ?, 'pending', ?)""",
+            cur = conn.execute(sql,
                 (channel, recipient, subject, body, booking_id, now)
             )
             conn.commit()
+            if _is_postgres():
+                row = cur.fetchone()
+                return row['id'] if row else None
             return cur.lastrowid
 
     def get_pending_messages(self, limit: int = 50) -> list:
