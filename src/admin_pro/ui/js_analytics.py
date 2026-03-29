@@ -114,11 +114,6 @@ async function loadAnalyticsOverview() {
       weekEl.textContent = d.this_week_confirmed ?? 0;
     }
 
-    // ana-revenue is the card wrapper; ana-revenue-val holds the displayed number
-    const revenueEl = document.getElementById('ana-revenue-val');
-    if (revenueEl) {
-      revenueEl.textContent = d.confirmed ?? 0;
-    }
   } catch (err) {
     console.error('loadAnalyticsOverview error:', err);
   }
@@ -341,67 +336,16 @@ async function loadSuburbsChart() {
 
     listEl.innerHTML = suburbs.map(s => {
       const pct = maxCount ? Math.round((s.count / maxCount) * 100) : 0;
-      return `
-        <div style="margin-bottom:10px">
-          <div style="display:flex;justify-content:space-between;margin-bottom:3px;font-size:13px">
-            <span>${s.name}</span>
-            <span style="color:var(--ap-text-muted)">${s.count} booking${s.count !== 1 ? 's' : ''}</span>
-          </div>
-          <div style="background:rgba(255,255,255,0.06);border-radius:3px;height:6px;width:100%">
-            <div style="background:${CHART_COLORS.blue};border-radius:3px;height:6px;width:${pct}%;transition:width 0.4s ease"></div>
-          </div>
-        </div>
-      `;
+      return `<div style="display:flex;align-items:center;gap:8px;height:36px;flex-shrink:0">` +
+        `<span style="font-size:12px;min-width:90px;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</span>` +
+        `<div style="flex:1;background:rgba(255,255,255,0.06);border-radius:3px;height:6px">` +
+          `<div style="background:${CHART_COLORS.blue};border-radius:3px;height:6px;width:${pct}%;transition:width 0.4s ease"></div>` +
+        `</div>` +
+        `<span style="font-size:12px;color:var(--ap-text-muted);min-width:28px;text-align:right">${s.count}</span>` +
+      `</div>`;
     }).join('');
   } catch (err) {
     console.error('loadSuburbsChart error:', err);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Revenue Card
-// Populates:
-//   ana-revenue-val     — total estimated revenue (in the KPI card)
-//   revenue-breakdown   — per-service bars: rev-diamond / rev-powder / rev-repair
-// Service type mapping: rim_repair → rev-repair, paint_touchup → rev-powder,
-//                       multiple_rims → rev-diamond (closest match available)
-// ---------------------------------------------------------------------------
-async function loadRevenueCard() {
-  try {
-    const data = await apiFetch('/v2/api/analytics/revenue');
-    const d = data;
-
-    // Update the KPI card value
-    const revenueValEl = document.getElementById('ana-revenue-val');
-    if (revenueValEl) {
-      revenueValEl.textContent = '$' + (d.total_estimated || 0).toLocaleString();
-    }
-
-    // Map service types to the three HTML bar elements
-    const SERVICE_TO_BAR = {
-      'multiple_rims':  'diamond',  // highest-value tier → Diamond Cut slot
-      'rim_repair':     'repair',
-      'paint_touchup':  'powder',
-    };
-
-    const byService = d.by_service || [];
-    const maxRevenue = byService.length ? Math.max(...byService.map(s => s.revenue || 0)) : 1;
-
-    byService.forEach(s => {
-      const barKey = SERVICE_TO_BAR[s.type];
-      if (!barKey) return;
-
-      const barEl   = document.getElementById('rev-' + barKey);
-      const valEl   = document.getElementById('rev-' + barKey + '-val');
-      const pct     = maxRevenue ? Math.round(((s.revenue || 0) / maxRevenue) * 100) : 0;
-
-      if (barEl)  barEl.style.width = pct + '%';
-      if (valEl)  valEl.textContent = '$' + (s.revenue || 0).toLocaleString();
-    });
-  } catch (err) {
-    console.error('loadRevenueCard error:', err);
-    const revenueValEl = document.getElementById('ana-revenue-val');
-    if (revenueValEl) revenueValEl.textContent = 'Error';
   }
 }
 
@@ -430,7 +374,6 @@ async function initAnalytics() {
     loadServicesChart(),
     loadFunnelChart(),
     loadSuburbsChart(),
-    loadRevenueCard(),
   ]);
 }
 """

@@ -7,9 +7,6 @@ JS_CUSTOMERS = """
 //
 // HTML IDs:
 //   #customers-count, #customer-search, #customers-tbody
-//   #customer-detail (side panel), #customer-detail-name
-//   #cd-email, #cd-phone, #cd-suburb, #cd-total, #cd-first, #cd-last
-//   #customer-bookings-tbody
 // ─────────────────────────────────────────────────────────────────────────────
 
 const CUSTOMERS_STATE = { all: [] };
@@ -99,89 +96,91 @@ const searchCustomers = debounce(async function(query) {
   }
 }, 300);
 
-// ─── Customer Detail Side Panel ───────────────────────────────────────────────
+// ─── Customer Detail Modal ────────────────────────────────────────────────────
 
 async function openCustomerDetail(emailB64) {
-  const panel = document.getElementById('customer-detail');
-  if (!panel) return;
-
-  panel.style.display = 'flex';
-  const nameEl = document.getElementById('customer-detail-name');
-  if (nameEl) nameEl.textContent = 'Loading…';
-  clearCustomerDetailPanel();
+  // Show a loading state immediately
+  showModal('Customer', '<div class="ap-loading"><div class="ap-spinner ap-spinner-sm"></div> Loading…</div>', '');
+  const overlay = document.getElementById('ap-modal-overlay');
+  if (overlay) {
+    const modal = overlay.querySelector('.ap-modal');
+    if (modal) modal.classList.add('ap-modal-wide');
+  }
 
   try {
     const data = await apiFetch(`/v2/api/customers/${encodeURIComponent(emailB64)}`);
+    const name = data.name || data.email;
+    const phone = data.phone || '—';
+    const email = data.email || '—';
+    const total = data.stats?.total ?? '—';
 
-    if (nameEl) nameEl.textContent = data.name || data.email;
-
-    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val || '—'; };
-    set('cd-email', data.email);
-    set('cd-phone', data.phone);
-
-    // Extract suburb from most recent booking_data if available
-    const suburb = data.bookings?.[0]?.booking_data?.suburb || data.bookings?.[0]?.booking_data?.address || null;
-    set('cd-suburb', suburb);
-
-    set('cd-total', data.stats?.total);
-    // Derive first/last dates from bookings list
+    // Derive first/last booking dates
     const dates = (data.bookings || [])
       .map(b => b.booking_data?.preferred_date || b.created_at)
       .filter(Boolean)
       .sort();
-    set('cd-first', dates.length ? formatDateShort(dates[0]) : null);
-    set('cd-last', dates.length ? formatDateShort(dates[dates.length - 1]) : null);
+    const firstDate = dates.length ? formatDateShort(dates[0]) : '—';
+    const lastDate  = dates.length ? formatDateShort(dates[dates.length - 1]) : '—';
 
-    // Bookings history table
-    const bookTbody = document.getElementById('customer-bookings-tbody');
-    if (bookTbody) {
-      const bookings = data.bookings || [];
-      if (bookings.length === 0) {
-        bookTbody.innerHTML = '<tr><td colspan="4" class="ap-table-empty">No bookings</td></tr>';
-      } else {
-        bookTbody.innerHTML = bookings.map(b => `
-          <tr style="cursor:pointer" onclick="openBookingDetail('${b.id}')">
+    // Build info rows
+    const infoRows = [
+      ['Email',         escapeHtml(email)],
+      ['Phone',         escapeHtml(phone)],
+      ['Total Bookings',String(total)],
+      ['First Booking', escapeHtml(firstDate)],
+      ['Last Booking',  escapeHtml(lastDate)],
+    ].map(([label, val]) => `
+      <div class="ap-info-row">
+        <span class="ap-info-label">${label}</span>
+        <span>${val}</span>
+      </div>
+    `).join('');
+
+    // Build booking history rows
+    const bookings = data.bookings || [];
+    let historyRows;
+    if (bookings.length === 0) {
+      historyRows = '<tr><td colspan="4" class="ap-table-empty">No bookings</td></tr>';
+    } else {
+      historyRows = bookings.map(b => {
+        const addr = escapeHtml(b.booking_data?.suburb || b.booking_data?.address || '—');
+        return `
+          <tr style="cursor:pointer" onclick="closeModal(); setTimeout(() => openBookingDetail('${b.id}'), 120)">
             <td>${b.booking_data?.preferred_date ? formatDateShort(b.booking_data.preferred_date) : '—'}</td>
             <td>${serviceLabel(b.booking_data?.service_type)}</td>
-            <td>${b.booking_data?.rim_count || '—'}</td>
+            <td class="ap-text-muted">${addr}</td>
             <td>${statusBadge(b.status)}</td>
           </tr>
-        `).join('');
-      }
+        `;
+      }).join('');
     }
 
-    // Maintenance warning
-    if (data.maintenance_due) {
-      const infoBlock = document.getElementById('customer-info-block');
-      if (infoBlock && !document.getElementById('cd-maintenance-warning')) {
-        const warn = document.createElement('div');
-        warn.id = 'cd-maintenance-warning';
-        warn.className = 'ap-card';
-        warn.style.cssText = 'border-color:var(--ap-amber);margin-top:10px;padding:10px;font-size:13px';
-        warn.textContent = '⚠ Maintenance reminder due';
-        infoBlock.after(warn);
-      }
+    // Maintenance warning block
+    const maintenanceHtml = data.maintenance_due
+      ? '<div class="ap-card" style="border-color:var(--ap-amber);padding:10px;font-size:13px;margin-bottom:16px">&#9888; Maintenance reminder due</div>'
+      : '';
+
+    const bodyHtml = `
+      <div class="ap-customer-info" style="margin-bottom:16px">${infoRows}</div>
+      ${maintenanceHtml}
+      <div style="font-size:0.85rem;font-weight:700;color:var(--ap-text-dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Booking History</div>
+      <div class="ap-table-wrap">
+        <table class="ap-table">
+          <thead><tr><th>Date</th><th>Service</th><th>Address</th><th>Status</th></tr></thead>
+          <tbody>${historyRows}</tbody>
+        </table>
+      </div>
+    `;
+
+    showModal(name, bodyHtml, '');
+    // Re-apply wide class after showModal (it re-uses the same overlay element)
+    if (overlay) {
+      const modal = overlay.querySelector('.ap-modal');
+      if (modal) modal.classList.add('ap-modal-wide');
     }
   } catch (e) {
-    if (nameEl) nameEl.textContent = 'Error loading customer';
-    showToast('Failed to load customer: ' + e.message, 'error');
+    showModal('Error', '<p class="ap-text-danger">Failed to load customer: ' + escapeHtml(e.message) + '</p>', '');
   }
-}
-
-function clearCustomerDetailPanel() {
-  ['cd-email','cd-phone','cd-suburb','cd-total','cd-first','cd-last'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.textContent = '—';
-  });
-  const tbody = document.getElementById('customer-bookings-tbody');
-  if (tbody) tbody.innerHTML = '<tr><td colspan="4" class="ap-table-empty">Loading…</td></tr>';
-  const warn = document.getElementById('cd-maintenance-warning');
-  if (warn) warn.remove();
-}
-
-function closeCustomerDetail() {
-  const panel = document.getElementById('customer-detail');
-  if (panel) panel.style.display = 'none';
 }
 // ─── End of Customers Section ─────────────────────────────────────────────────
 """

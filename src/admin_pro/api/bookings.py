@@ -15,6 +15,44 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Customer notification helper
+# ---------------------------------------------------------------------------
+
+def _notify_customer_confirmed(booking_id, booking_data, customer_email, thread_id):
+    """Send SMS and/or email confirmation to the customer after admin confirms.
+
+    Mirrors the notification logic in twilio_handler.handle_owner_confirm so
+    that every confirmation path notifies the customer consistently.
+    Returns a dict with keys 'sms_sent' and 'email_sent' for logging.
+    """
+    from feature_flags import get_flag
+
+    sms_sent = False
+    email_sent = False
+
+    customer_phone = booking_data.get('customer_phone')
+
+    if customer_phone and get_flag('flag_auto_sms_customer'):
+        try:
+            from twilio_handler import send_sms, build_customer_confirmation_sms
+            msg = build_customer_confirmation_sms(booking_data)
+            send_sms(customer_phone, msg)
+            sms_sent = True
+        except Exception:
+            logger.exception("_notify_customer_confirmed: SMS failed for booking %s", booking_id)
+
+    if customer_email and get_flag('flag_auto_email_customer'):
+        try:
+            from twilio_handler import send_confirmation_email
+            send_confirmation_email(customer_email, booking_data, booking_id=booking_id, thread_id=thread_id)
+            email_sent = True
+        except Exception:
+            logger.exception("_notify_customer_confirmed: email failed for booking %s", booking_id)
+
+    return {'sms_sent': sms_sent, 'email_sent': email_sent}
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -254,7 +292,7 @@ def register(bp, require_auth):
             # Fetch current booking_data so we can pass it through
             with _get_conn() as conn:
                 row = conn.execute(
-                    "SELECT booking_data, status FROM bookings WHERE id=?",
+                    "SELECT booking_data, status, customer_email, thread_id FROM bookings WHERE id=?",
                     (booking_id,)
                 ).fetchone()
 
@@ -281,11 +319,21 @@ def register(bp, require_auth):
             if not success:
                 return jsonify({'ok': False, 'error': 'Could not confirm booking (possible time conflict or state error)'}), 409
 
+            # Notify customer (SMS and/or email) now that the booking is confirmed
+            customer_email = row['customer_email'] or booking_data.get('customer_email')
+            thread_id = row['thread_id']
+
+            notif = _notify_customer_confirmed(booking_id, booking_data, customer_email, thread_id)
+
             state.log_booking_event(
                 booking_id, 'confirmed', actor='owner_ui',
-                details={'triggered_by': 'admin_dashboard'}
+                details={
+                    'triggered_by': 'admin_dashboard',
+                    'customer_notified_sms': notif['sms_sent'],
+                    'customer_notified_email': notif['email_sent'],
+                }
             )
-            logger.info("Admin confirmed booking %s", booking_id)
+            logger.info("Admin confirmed booking %s (sms=%s email=%s)", booking_id, notif['sms_sent'], notif['email_sent'])
             return jsonify({'ok': True})
 
         except Exception:
@@ -465,7 +513,7 @@ def register(bp, require_auth):
                 try:
                     with _get_conn() as conn:
                         row = conn.execute(
-                            "SELECT booking_data, status FROM bookings WHERE id=?",
+                            "SELECT booking_data, status, customer_email, thread_id FROM bookings WHERE id=?",
                             (booking_id,)
                         ).fetchone()
 
@@ -493,9 +541,18 @@ def register(bp, require_auth):
                             errors.append({'id': booking_id, 'error': 'confirm failed (possible conflict)'})
                             continue
 
+                        # Notify customer after bulk confirm
+                        bulk_customer_email = row.get('customer_email') or booking_data.get('customer_email')
+                        bulk_thread_id = row.get('thread_id')
+                        bulk_notif = _notify_customer_confirmed(booking_id, booking_data, bulk_customer_email, bulk_thread_id)
+
                         state.log_booking_event(
                             booking_id, 'confirmed', actor='owner_ui',
-                            details={'triggered_by': 'bulk_action'}
+                            details={
+                                'triggered_by': 'bulk_action',
+                                'customer_notified_sms': bulk_notif['sms_sent'],
+                                'customer_notified_email': bulk_notif['email_sent'],
+                            }
                         )
 
                     elif action == 'decline':

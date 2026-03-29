@@ -19,8 +19,11 @@ CSS = """
   --ap-card-hover: #152a4a;
   --ap-border: #1a3a5c;
   --ap-border-light: #253f60;
-  --ap-accent: #3b82f6;
-  --ap-accent-hover: #2563eb;
+  --ap-primary: #C8102E;
+  --ap-primary-dark: #A00D22;
+  --ap-primary-light: #E8304A;
+  --ap-accent: #C8102E;
+  --ap-accent-hover: #A00D22;
   --ap-green: #22c55e;
   --ap-amber: #f59e0b;
   --ap-red: #ef4444;
@@ -37,6 +40,8 @@ CSS = """
   --ap-sidebar-collapsed: 60px;
   --ap-topbar-height: 60px;
   --ap-transition: 200ms ease;
+  --ap-sidebar-bg: #1A1A1A;
+  --ap-sidebar-border: #2a2a2a;
 }
 
 /* --- Keyframes --------------------------------------------- */
@@ -153,8 +158,8 @@ body.ap-body {
   width: var(--ap-sidebar-width);
   min-width: var(--ap-sidebar-width);
   height: 100vh;
-  background: var(--ap-surface);
-  border-right: 1px solid var(--ap-border);
+  background: var(--ap-sidebar-bg);
+  border-right: 1px solid var(--ap-sidebar-border);
   display: flex;
   flex-direction: column;
   position: fixed;
@@ -175,7 +180,7 @@ body.ap-body {
   align-items: center;
   gap: 12px;
   padding: 20px 16px;
-  border-bottom: 1px solid var(--ap-border);
+  border-bottom: 1px solid var(--ap-sidebar-border);
   min-height: var(--ap-topbar-height);
   white-space: nowrap;
   overflow: hidden;
@@ -219,7 +224,38 @@ body.ap-body {
 
 .ap-sidebar-footer {
   padding: 12px 0;
-  border-top: 1px solid var(--ap-border);
+  border-top: 1px solid var(--ap-sidebar-border);
+}
+
+/* --- Sidebar Brand Strip ----------------------------------- */
+.ap-brand-strip {
+  padding: 16px 16px 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.ap-brand-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: 0.02em;
+  line-height: 1.3;
+  text-transform: uppercase;
+  display: block;
+}
+
+.ap-brand-accent-line {
+  display: block;
+  height: 2px;
+  background: var(--ap-primary);
+  border-radius: 1px;
+  margin-top: 8px;
+  width: 32px;
+}
+
+.ap-sidebar.collapsed .ap-brand-strip {
+  opacity: 0;
+  pointer-events: none;
 }
 
 /* --- Nav Section Labels ------------------------------------ */
@@ -257,7 +293,7 @@ body.ap-body {
 }
 
 .ap-nav-item:hover {
-  background: rgba(59, 130, 246, 0.1);
+  background: rgba(200, 16, 46, 0.12);
   color: var(--ap-text);
   padding-left: 20px;
   transition: background var(--ap-transition), color var(--ap-transition),
@@ -265,8 +301,8 @@ body.ap-body {
 }
 
 .ap-nav-item.active {
-  background: rgba(59, 130, 246, 0.15);
-  color: var(--ap-accent);
+  background: rgba(200, 16, 46, 0.18);
+  color: #ffffff;
   font-weight: 600;
 }
 
@@ -354,13 +390,13 @@ body.ap-body {
   top: 0;
   z-index: 50;
   height: var(--ap-topbar-height);
-  background: linear-gradient(135deg, var(--ap-surface) 0%, #0f2848 100%);
-  border-bottom: 1px solid var(--ap-border);
+  background: linear-gradient(135deg, #C8102E 0%, #A00D22 100%);
+  border-bottom: 1px solid #8a0b1c;
   display: flex;
   align-items: center;
   padding: 0 24px;
   gap: 16px;
-  box-shadow: 0 2px 12px rgba(0,0,0,0.25);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.35);
 }
 
 .ap-topbar-toggle {
@@ -497,12 +533,12 @@ body.ap-body {
   align-items: center;
   gap: 6px;
   padding: 6px 12px;
-  background: rgba(59, 130, 246, 0.1);
-  border: 1px solid rgba(59, 130, 246, 0.2);
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.25);
   border-radius: var(--ap-radius-sm);
   font-size: 13px;
   font-weight: 600;
-  color: var(--ap-text);
+  color: #ffffff;
   cursor: pointer;
   position: relative;
   transition: background var(--ap-transition), border-color var(--ap-transition);
@@ -510,8 +546,8 @@ body.ap-body {
 }
 
 .ap-user-badge:hover {
-  background: rgba(59, 130, 246, 0.18);
-  border-color: rgba(59, 130, 246, 0.4);
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.4);
 }
 
 /* Admin dropdown menu */
@@ -545,7 +581,7 @@ body.ap-body {
 }
 
 .ap-user-dropdown-item:hover {
-  background: rgba(59, 130, 246, 0.1);
+  background: rgba(200, 16, 46, 0.1);
   color: var(--ap-text);
 }
 
@@ -766,10 +802,10 @@ body.ap-body {
   border-top-color: var(--ap-green);
 }
 
-.ap-kpi-card#kpi-pending  { border-top-color: var(--ap-amber); }
+.ap-kpi-card#kpi-pending  { border-top-color: var(--ap-primary); }
 .ap-kpi-card#kpi-today    { border-top-color: var(--ap-green); }
 .ap-kpi-card#kpi-week     { border-top-color: var(--ap-accent); }
-.ap-kpi-card#kpi-total    { border-top-color: var(--ap-purple); }
+.ap-kpi-card#kpi-total    { border-top-color: var(--ap-primary); }
 .ap-kpi-card#ana-conversion  { border-top-color: var(--ap-teal); }
 .ap-kpi-card#ana-avg-confirm { border-top-color: var(--ap-amber); }
 .ap-kpi-card#ana-week        { border-top-color: var(--ap-green); }
@@ -862,7 +898,7 @@ body.ap-body {
 }
 
 .ap-table tbody tr:hover {
-  background: rgba(59, 130, 246, 0.05);
+  background: rgba(200, 16, 46, 0.05);
 }
 
 .ap-table-row-clickable {
@@ -870,7 +906,7 @@ body.ap-body {
 }
 
 .ap-table-row-clickable:hover {
-  background: rgba(59, 130, 246, 0.1) !important;
+  background: rgba(200, 16, 46, 0.1) !important;
 }
 
 .ap-table-actions {
@@ -996,7 +1032,7 @@ body.ap-body {
 .ap-select:focus,
 .ap-textarea:focus {
   border-color: var(--ap-accent);
-  box-shadow: 0 0 0 3px rgba(59,130,246,0.15);
+  box-shadow: 0 0 0 3px rgba(200,16,46,0.15);
 }
 
 .ap-input::placeholder,
@@ -1053,8 +1089,8 @@ body.ap-body {
 }
 
 .ap-badge-blue {
-  background: rgba(59, 130, 246, 0.15);
-  color: var(--ap-accent);
+  background: rgba(200, 16, 46, 0.15);
+  color: var(--ap-primary);
 }
 
 .ap-badge-purple {
@@ -1079,7 +1115,10 @@ body.ap-body {
 /* --- Modal ------------------------------------------------- */
 .ap-modal-overlay {
   position: fixed;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: var(--ap-sidebar-width, 240px);
   z-index: 500;
   background: rgba(7, 17, 31, 0.8);
   backdrop-filter: blur(4px);
@@ -1090,6 +1129,17 @@ body.ap-body {
   opacity: 0;
   pointer-events: none;
   transition: opacity 200ms ease;
+}
+
+.ap-modal-wide {
+  max-width: 680px !important;
+  width: 90vw;
+}
+
+/* When sidebar is collapsed, shrink the modal overlay left offset */
+#ap-main.sidebar-collapsed ~ * .ap-modal-overlay,
+.sidebar-collapsed .ap-modal-overlay {
+  left: var(--ap-sidebar-collapsed, 60px);
 }
 
 .ap-modal-overlay.open {
@@ -1309,7 +1359,7 @@ body.ap-body {
 .ap-pipeline-node:hover {
   border-color: var(--ap-accent);
   transform: translateY(-3px);
-  box-shadow: 0 6px 20px rgba(59,130,246,0.2);
+  box-shadow: 0 6px 20px rgba(200,16,46,0.2);
 }
 
 .ap-pipeline-node:hover::before {
@@ -1430,13 +1480,13 @@ body.ap-body {
 }
 
 .ap-pill:hover {
-  background: rgba(59,130,246,0.1);
+  background: rgba(200, 16, 46, 0.1);
   color: var(--ap-text);
   border-color: var(--ap-accent);
 }
 
 .ap-pill.active {
-  background: rgba(59,130,246,0.18);
+  background: rgba(200, 16, 46, 0.18);
   color: var(--ap-accent);
   border-color: var(--ap-accent);
   font-weight: 600;
@@ -1860,12 +1910,20 @@ body.ap-body {
   min-width: 120px;
 }
 
-/* --- Suburbs List ----------------------------------------- */
+/* --- Suburbs Card + List ---------------------------------- */
+.ap-card-suburbs {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .ap-suburbs-list {
   display: flex;
   flex-direction: column;
   gap: 6px;
   padding: 4px 0;
+  max-height: 320px;
+  overflow-y: auto;
 }
 
 /* --- Revenue Bar ------------------------------------------ */
@@ -2567,6 +2625,7 @@ body.ap-body {
   }
   .ap-modal-overlay {
     align-items: flex-end;
+    left: 0;
   }
 
   /* Toast */

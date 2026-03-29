@@ -3,25 +3,18 @@
 
 HTML_SIDEBAR = """
 <aside class="ap-sidebar" id="ap-sidebar">
-  <div class="ap-logo">
-    <div class="ap-logo-icon">
-      <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" width="40" height="40">
-        <circle cx="20" cy="20" r="18" stroke="currentColor" stroke-width="2.5"/>
-        <circle cx="20" cy="20" r="7" stroke="currentColor" stroke-width="2"/>
-        <line x1="20" y1="2" x2="20" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-        <line x1="20" y1="27" x2="20" y2="38" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-        <line x1="2" y1="20" x2="13" y2="20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-        <line x1="27" y1="20" x2="38" y2="20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-        <line x1="5.5" y1="5.5" x2="13.2" y2="13.2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-        <line x1="26.8" y1="26.8" x2="34.5" y2="34.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-        <line x1="34.5" y1="5.5" x2="26.8" y2="13.2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-        <line x1="13.2" y1="26.8" x2="5.5" y2="34.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+  <div class="ap-sidebar-logo">
+    <div class="ap-sidebar-logo-icon">
+      <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" width="18" height="18">
+        <path d="M3 17h1.5a2.5 2.5 0 0 0 5 0h6a2.5 2.5 0 0 0 5 0H22" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M2 9h14l3 5H2V9z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </div>
-    <div class="ap-logo-text">
-      <span class="ap-logo-title">Rim Repair</span>
-      <span class="ap-logo-subtitle">Control Pro</span>
-    </div>
+    <div class="ap-sidebar-logo-text">Perth S&amp;E Auto Centre</div>
+  </div>
+  <div class="ap-brand-strip">
+    <span class="ap-brand-name">Control Pro</span>
+    <span class="ap-brand-accent-line"></span>
   </div>
 
   <nav class="ap-nav">
@@ -356,11 +349,6 @@ HTML_SECTIONS = """
       <div class="ap-kpi-value" id="ana-week-val">—</div>
       <div class="ap-kpi-sub" id="ana-week-delta"></div>
     </div>
-    <div class="ap-card ap-kpi-card" id="ana-revenue">
-      <div class="ap-kpi-label">Est. Revenue</div>
-      <div class="ap-kpi-value" id="ana-revenue-val">—</div>
-      <div class="ap-kpi-sub">this month</div>
-    </div>
   </div>
 
   <div class="ap-grid-2">
@@ -414,40 +402,16 @@ HTML_SECTIONS = """
         </div>
       </div>
     </div>
-    <div class="ap-card">
+    <div class="ap-card ap-card-suburbs">
       <div class="ap-card-header">
         <span class="ap-card-title">Top Suburbs</span>
       </div>
-      <div class="ap-chart-container" id="chart-suburbs">
-        <div class="ap-suburbs-list" id="suburbs-list">
-          <div class="ap-table-empty">Loading…</div>
-        </div>
+      <div class="ap-suburbs-list" id="suburbs-list">
+        <div class="ap-table-empty">Loading…</div>
       </div>
     </div>
   </div>
 
-  <div class="ap-card">
-    <div class="ap-card-header">
-      <span class="ap-card-title">Revenue Breakdown</span>
-    </div>
-    <div class="ap-grid-3" id="revenue-breakdown">
-      <div class="ap-revenue-item">
-        <div class="ap-revenue-label">Diamond Cut</div>
-        <div class="ap-revenue-bar-wrap"><div class="ap-revenue-bar" id="rev-diamond" style="width:0%"></div></div>
-        <div class="ap-revenue-val" id="rev-diamond-val">—</div>
-      </div>
-      <div class="ap-revenue-item">
-        <div class="ap-revenue-label">Powder Coat</div>
-        <div class="ap-revenue-bar-wrap"><div class="ap-revenue-bar" id="rev-powder" style="width:0%"></div></div>
-        <div class="ap-revenue-val" id="rev-powder-val">—</div>
-      </div>
-      <div class="ap-revenue-item">
-        <div class="ap-revenue-label">Repair Only</div>
-        <div class="ap-revenue-bar-wrap"><div class="ap-revenue-bar" id="rev-repair" style="width:0%"></div></div>
-        <div class="ap-revenue-val" id="rev-repair-val">—</div>
-      </div>
-    </div>
-  </div>
 </section>
 
 <!-- ═══════════════════════════════════════════════ CALENDAR ══ -->
@@ -670,33 +634,8 @@ HTML_SECTIONS = """
       </div>
     </div>
 
-    <div class="ap-card ap-customer-detail-card" id="customer-detail" style="display:none">
-      <div class="ap-card-header">
-        <span class="ap-card-title" id="customer-detail-name">Customer Name</span>
-        <button class="ap-btn ap-btn-ghost ap-btn-xs" onclick="closeCustomerDetail()">✕</button>
-      </div>
-      <div class="ap-customer-info" id="customer-info-block">
-        <div class="ap-info-row"><span class="ap-info-label">Email</span><span id="cd-email">—</span></div>
-        <div class="ap-info-row"><span class="ap-info-label">Phone</span><span id="cd-phone">—</span></div>
-        <div class="ap-info-row"><span class="ap-info-label">Suburb</span><span id="cd-suburb">—</span></div>
-        <div class="ap-info-row"><span class="ap-info-label">Total Bookings</span><span id="cd-total">—</span></div>
-        <div class="ap-info-row"><span class="ap-info-label">First Booking</span><span id="cd-first">—</span></div>
-        <div class="ap-info-row"><span class="ap-info-label">Last Booking</span><span id="cd-last">—</span></div>
-      </div>
-      <div class="ap-customer-bookings-header">
-        <span class="ap-card-title" style="font-size:0.9rem">Booking History</span>
-      </div>
-      <div class="ap-table-wrap">
-        <table class="ap-table" id="customer-bookings-table">
-          <thead>
-            <tr><th>Date</th><th>Service</th><th>Rims</th><th>Status</th></tr>
-          </thead>
-          <tbody id="customer-bookings-tbody">
-            <tr><td colspan="4" class="ap-table-empty">Select a customer</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
+    <!-- Customer detail side panel replaced by modal popup -->
+    <div id="customer-detail" style="display:none"></div>
   </div>
 </section>
 
