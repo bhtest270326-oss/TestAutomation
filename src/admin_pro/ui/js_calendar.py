@@ -255,7 +255,7 @@ function showCancelDayForm(dateStr) {
       <p>Cancel all bookings on <strong>${formatDate(dateStr)}</strong>?</p>
       <div class="ap-form-group ap-mt-16">
         <label>Reason</label>
-        <textarea class="ap-textarea" id="cancel-day-reason" placeholder="Reason for cancellation..." rows="3"></textarea>
+        <textarea class="ap-textarea" id="cal-cancel-reason" placeholder="Reason for cancellation..." rows="3"></textarea>
       </div>
     `,
     `<button class="ap-btn ap-btn-danger" onclick="submitCancelDay('${dateStr}')">Cancel All Jobs</button>`
@@ -263,7 +263,7 @@ function showCancelDayForm(dateStr) {
 }
 
 async function submitCancelDay(dateStr) {
-  const reasonEl = document.getElementById('cancel-day-reason');
+  const reasonEl = document.getElementById('cal-cancel-reason');
   const reason   = (reasonEl && reasonEl.value.trim()) ? reasonEl.value.trim() : 'No reason given';
 
   try {
