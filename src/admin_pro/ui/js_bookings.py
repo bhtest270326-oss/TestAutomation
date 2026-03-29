@@ -475,42 +475,49 @@ async function openBookingDetail(bookingId) {
 
     const body = [
       \'<div class="ap-booking-detail">\',
-      \'  <div class="ap-grid-2">\',
-      \'    <div class="ap-booking-detail__info">\',
 
-      \'      <h4 class="ap-detail-heading">Customer</h4>\',
-      \'      <dl class="ap-dl">\',
-      \'        <dt>Name</dt>  <dd>\' + name  + \'</dd>\',
-      \'        <dt>Email</dt> <dd><a href="mailto:\' + email + \'" class="ap-link">\' + email + \'</a></dd>\',
-      \'        <dt>Phone</dt> <dd>\' + phone + \'</dd>\',
-      \'      </dl>\',
+      // ── Customer + Schedule (2 col) ──
+      \'<div class="ap-bd-cols">\',
+        \'<div>\',
+          \'<div class="ap-detail-heading">Customer</div>\',
+          \'<dl class="ap-dl">\',
+            \'<dt>Name</dt>  <dd>\' + name  + \'</dd>\',
+            \'<dt>Email</dt> <dd><a href="mailto:\' + email + \'" class="ap-link">\' + email + \'</a></dd>\',
+            \'<dt>Phone</dt> <dd>\' + phone + \'</dd>\',
+          \'</dl>\',
+        \'</div>\',
+        \'<div>\',
+          \'<div class="ap-detail-heading">Schedule</div>\',
+          \'<dl class="ap-dl">\',
+            \'<dt>Date</dt>    <dd>\' + dateStr + \'</dd>\',
+            \'<dt>Time</dt>    <dd>\' + timeStr + \'</dd>\',
+            \'<dt>Address</dt><dd>\' + address + \'</dd>\',
+          \'</dl>\',
+        \'</div>\',
+      \'</div>\',
 
-      \'      <h4 class="ap-detail-heading">Service</h4>\',
-      \'      <dl class="ap-dl">\',
-      \'        <dt>Type</dt>    <dd>\' + service + \'</dd>\',
-      \'        <dt>Rims</dt>   <dd>\' + rims    + \'</dd>\',
-      \'        <dt>Vehicle</dt><dd>\' + vehicle + \'</dd>\',
-      \'      </dl>\',
+      // ── Service ──
+      \'<div class="ap-bd-sep"></div>\',
+      \'<div class="ap-detail-heading">Service</div>\',
+      \'<dl class="ap-dl">\',
+        \'<dt>Type</dt>    <dd>\' + service + \'</dd>\',
+        \'<dt>Rims</dt>   <dd>\' + rims    + \'</dd>\',
+        \'<dt>Vehicle</dt><dd>\' + vehicle + \'</dd>\',
+      \'</dl>\',
 
-      \'      <h4 class="ap-detail-heading">Schedule</h4>\',
-      \'      <dl class="ap-dl">\',
-      \'        <dt>Date</dt>    <dd>\' + dateStr + \'</dd>\',
-      \'        <dt>Time</dt>    <dd>\' + timeStr + \'</dd>\',
-      \'        <dt>Address</dt><dd>\' + address + \'</dd>\',
-      \'      </dl>\',
-
-      \'      <h4 class="ap-detail-heading">Notes</h4>\',
-      \'      <p class="ap-notes-text">\' + (notes || \'<span class="ap-muted">None</span>\') + \'</p>\',
-      \'      <button class="ap-btn ap-btn-ghost ap-btn--sm" onclick="addNote(\\'\' + bookingId + \'\\')">+ Add note</button>\',
+      // ── Notes ──
+      \'<div class="ap-bd-sep"></div>\',
+      \'<div class="ap-detail-heading">Notes</div>\',
+      \'<div class="ap-notes-text">\' + (notes || \'<span style="opacity:.5">None</span>\') + \'</div>\',
+      \'<button class="ap-btn ap-btn-ghost ap-btn-sm" style="margin-top:4px" onclick="addNote(\\'\' + bookingId + \'\\')">+ Add note</button>\',
 
       renderImageAssessment(bd.image_assessment),
 
-      \'    </div>\',
-      \'    <div class="ap-booking-detail__trail">\',
-      \'      <h4 class="ap-detail-heading">Audit Trail</h4>\',
-      \'      <div class="ap-timeline">\' + eventsHtml + \'</div>\',
-      \'    </div>\',
-      \'  </div>\',
+      // ── Activity ──
+      \'<div class="ap-bd-sep"></div>\',
+      \'<div class="ap-detail-heading">Activity</div>\',
+      \'<div class="ap-timeline">\' + eventsHtml + \'</div>\',
+
       \'</div>\',
     ].join(\'\');
 
@@ -520,13 +527,11 @@ async function openBookingDetail(bookingId) {
           \'<button class="ap-btn ap-btn-danger" onclick="openDeclineModal(\\'\' + bookingId + \'\\')">&#10007; Decline</button>\',
           \'<button class="ap-btn ap-btn-ghost" onclick="openEditModal(\\'\' + bookingId + \'\\')">&#9998; Edit</button>\',
         ].join(\'\')
-      : (
-          \'<button class="ap-btn ap-btn-ghost" onclick="openEditModal(\\'\' + bookingId + \'\\')">&#9998; Edit</button>\'
-        );
+      : \'<button class="ap-btn ap-btn-ghost" onclick="openEditModal(\\'\' + bookingId + \'\\')">&#9998; Edit</button>\';
 
     const shortId = bookingId.substring(0, 8) + \'…\';
     showModal(
-      \'Booking \' + shortId + \' \' + (statusBadge(booking.status)),
+      \'Booking \' + shortId + \' &nbsp;\' + statusBadge(booking.status),
       body,
       footer
     );

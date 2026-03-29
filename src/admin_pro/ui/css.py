@@ -1225,6 +1225,100 @@ body.ap-body {
   flex-shrink: 0;
 }
 
+/* --- Booking Detail Modal ---------------------------------- */
+.ap-booking-detail { font-size: 14px; line-height: 1.5; }
+
+.ap-bd-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 24px;
+  margin-bottom: 4px;
+}
+
+@media (max-width: 540px) {
+  .ap-bd-cols { grid-template-columns: 1fr; }
+}
+
+.ap-bd-sep {
+  height: 1px;
+  background: var(--ap-border);
+  margin: 14px 0;
+}
+
+.ap-detail-heading {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ap-primary);
+  margin: 0 0 8px;
+}
+
+.ap-dl {
+  display: grid;
+  grid-template-columns: 68px 1fr;
+  row-gap: 4px;
+  column-gap: 10px;
+  margin: 0 0 4px;
+}
+.ap-dl dt {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ap-text-muted);
+  padding-top: 1px;
+  white-space: nowrap;
+}
+.ap-dl dd {
+  font-size: 13px;
+  color: var(--ap-text);
+  margin: 0;
+  word-break: break-word;
+}
+
+.ap-notes-text {
+  font-size: 13px;
+  color: var(--ap-text);
+  background: var(--ap-surface);
+  border: 1px solid var(--ap-border);
+  border-radius: var(--ap-radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  min-height: 38px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+/* Timeline */
+.ap-timeline { display: flex; flex-direction: column; }
+.ap-timeline-item {
+  display: flex;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--ap-border);
+}
+.ap-timeline-item:last-child { border-bottom: none; padding-bottom: 0; }
+.ap-timeline-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ap-primary);
+  opacity: 0.7;
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+.ap-timeline-content { flex: 1; min-width: 0; }
+.ap-timeline-header { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.ap-timeline-type {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ap-text);
+  text-transform: capitalize;
+}
+.ap-timeline-actor { font-size: 11px; color: var(--ap-text-muted); }
+.ap-timeline-detail { font-size: 12px; color: var(--ap-text-muted); margin-top: 2px; }
+.ap-timeline-time { font-size: 11px; color: var(--ap-text-muted); margin-top: 1px; }
+
 /* --- Toast Notifications ----------------------------------- */
 .ap-toast-container {
   position: fixed;
