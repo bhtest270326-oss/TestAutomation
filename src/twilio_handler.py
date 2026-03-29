@@ -659,7 +659,8 @@ def send_confirmation_email(to_email, booking_data, booking_id=None, thread_id=N
               f'Kind regards,<br><strong style="color:#C41230;">Rim Repair Team</strong></p>'
         )
 
-        send_customer_email(service, to_email, 'Booking Confirmed — Perth Swedish & European Auto Centre', content, thread_id=thread_id)
+        ref = f' #{booking_id}' if booking_id else ''
+        send_customer_email(service, to_email, f'Booking Confirmed{ref} — Perth Swedish & European Auto Centre', content, thread_id=thread_id)
         logger.info(f"Confirmation email sent to {to_email}")
     except Exception as e:
         logger.error(f"Email send error: {e}")
@@ -753,9 +754,10 @@ def send_reschedule_change_email(to_email, booking_data, booking_id, old_date, t
               f'Kind regards,<br><strong style="color:{RED};">Rim Repair Team</strong></p>'
         )
 
+        ref = f' #{booking_id}' if booking_id else ''
         send_customer_email(
             service, to_email,
-            f'Booking Change Confirmed — Perth Swedish & European Auto Centre',
+            f'Booking Change Confirmed{ref} — Perth Swedish & European Auto Centre',
             content,
             thread_id=thread_id,
         )

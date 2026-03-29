@@ -307,9 +307,24 @@ class StateManager:
     # Pending bookings
     # ------------------------------------------------------------------
 
+    def _next_booking_number(self) -> str:
+        """Return the next sequential booking number (100001, 100002, …) atomically."""
+        with _get_conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT value FROM app_state WHERE key='booking_counter'"
+            ).fetchone()
+            current = int(row['value']) if row else 100000
+            nxt = current + 1
+            conn.execute(
+                "INSERT OR REPLACE INTO app_state(key, value) VALUES ('booking_counter', ?)",
+                (str(nxt),)
+            )
+        return str(nxt)
+
     def create_pending_booking(self, booking_data, source, customer_email=None,
                                 raw_message=None, msg_id=None, thread_id=None):
-        pending_id = str(uuid.uuid4())[:8].upper()
+        pending_id = self._next_booking_number()
         raw_message_stored = (raw_message or '')[:2000]
         with self._conn() as conn:
             conn.execute("""
