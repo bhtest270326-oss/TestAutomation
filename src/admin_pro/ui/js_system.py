@@ -50,10 +50,7 @@ async function loadFeatureFlags() {
             <div class="ap-flag-info">
               <div class="ap-flag-label-row">
                 <span class="ap-flag-label">${escapeHtml(flag.label)}</span>
-                <span class="ap-flag-info-icon" tabindex="0" aria-label="${escapeHtml(flag.description)}">
-                  &#x24D8;
-                  <span class="ap-flag-tooltip">${escapeHtml(flag.description)}</span>
-                </span>
+                <span class="ap-flag-info-icon" tabindex="0" aria-label="${escapeHtml(flag.description)}">i<span class="ap-flag-tooltip">${escapeHtml(flag.description)}</span></span>
               </div>
             </div>
             <label class="ap-toggle" title="${flag.enabled ? 'Enabled — click to disable' : 'Disabled — click to enable'}">
@@ -162,8 +159,8 @@ function injectFlagStyles() {
     .ap-flag-card.disabled { opacity:.7; }
     .ap-flag-label-row { display:flex; align-items:center; gap:6px; }
     .ap-flag-label { font-weight:600; font-size:14px; }
-    .ap-flag-info-icon { position:relative; display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; font-size:14px; color:var(--ap-text-muted); cursor:default; flex-shrink:0; line-height:1; }
-    .ap-flag-info-icon:hover { color:var(--ap-primary); }
+    .ap-flag-info-icon { position:relative; display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px; background:var(--ap-text-muted); color:#0f0f0f; border-radius:50%; font-size:10px; font-weight:700; font-style:italic; font-family:serif; cursor:pointer; flex-shrink:0; user-select:none; transition:background .15s; }
+    .ap-flag-info-icon:hover { background:var(--ap-primary); }
     .ap-flag-tooltip { visibility:hidden; opacity:0; position:absolute; bottom:calc(100% + 8px); left:50%; transform:translateX(-50%); background:#1e1e1e; color:var(--ap-text); font-size:12px; font-weight:400; line-height:1.5; padding:8px 12px; border-radius:8px; border:1px solid var(--ap-border-light); box-shadow:0 4px 16px rgba(0,0,0,0.5); white-space:normal; width:240px; text-align:left; pointer-events:none; transition:opacity .15s, visibility .15s; z-index:999; }
     .ap-flag-tooltip::after { content:''; position:absolute; top:100%; left:50%; transform:translateX(-50%); border:6px solid transparent; border-top-color:#1e1e1e; }
     .ap-flag-info-icon:hover .ap-flag-tooltip,

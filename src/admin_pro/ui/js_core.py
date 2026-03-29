@@ -572,7 +572,16 @@ async function submitChangePassword() {
 
 function openDocumentation() {
   closeAdminDropdown();
-  window.open('/docs', '_blank');
+  showModal('Quick Reference', `
+    <div style="line-height:1.8;font-size:14px">
+      <p style="margin-bottom:12px"><strong>Booking flow:</strong> Customer emails → AI extracts details → Owner gets SMS → reply YES to confirm → customer notified.</p>
+      <p style="margin-bottom:12px"><strong>Calendar:</strong> Click a day to see jobs. Use "Cancel Day" to notify all customers of a cancellation.</p>
+      <p style="margin-bottom:12px"><strong>Feature Flags:</strong> Toggle automation on/off in System → Feature Flags. Hover the <em>i</em> icon for descriptions.</p>
+      <p style="margin-bottom:12px"><strong>Customers:</strong> Click any customer row to view their full booking history.</p>
+      <p style="margin-bottom:12px"><strong>Communications:</strong> View incoming emails, SMS queue, and activity log. Gmail requires OAuth to be active.</p>
+      <p><strong>Support:</strong> Check Railway logs for errors. The Activity Feed shows all system events in real-time.</p>
+    </div>
+  `, '');
 }
 
 function adminLogout() {

@@ -166,7 +166,8 @@ body.ap-body {
   left: 0;
   top: 0;
   z-index: 100;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: hidden;
   transition: width var(--ap-transition), min-width var(--ap-transition);
 }
 
@@ -215,7 +216,8 @@ body.ap-body {
   width: 0;
 }
 
-.ap-sidebar-nav {
+.ap-sidebar-nav,
+.ap-nav {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
