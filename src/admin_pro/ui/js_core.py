@@ -220,6 +220,9 @@ function showModal(title, bodyHtml, footerHtml = '') {
   document.getElementById('ap-modal-footer').innerHTML = footerHtml;
 
   overlay.style.display = 'flex';
+  // Force reflow before adding .open so the CSS opacity transition fires
+  void overlay.offsetWidth;
+  overlay.classList.add('open');
 
   const dialog = overlay.querySelector('.ap-modal-dialog') || overlay.firstElementChild;
   if (dialog) {
@@ -231,7 +234,10 @@ function showModal(title, bodyHtml, footerHtml = '') {
 
 function closeModal() {
   const overlay = document.getElementById('ap-modal-overlay');
-  if (overlay) overlay.style.display = 'none';
+  if (!overlay) return;
+  overlay.classList.remove('open');
+  // Hide after transition completes (200ms matches CSS transition)
+  setTimeout(() => { if (!overlay.classList.contains('open')) overlay.style.display = 'none'; }, 210);
 }
 
 // ── Date / Time Utilities ────────────────────────────────────
