@@ -1,7 +1,7 @@
 CSS = """
 /* ============================================================
    Admin Pro Dashboard — Complete Stylesheet
-   Dark navy theme, ap- prefix, mobile-responsive
+   Dark charcoal theme, ap- prefix, mobile-responsive
    ============================================================ */
 
 /* --- Reset ------------------------------------------------- */
@@ -13,12 +13,12 @@ CSS = """
 
 /* --- CSS Custom Properties --------------------------------- */
 :root {
-  --ap-bg: #07111f;
-  --ap-surface: #0d1f35;
-  --ap-card: #112240;
-  --ap-card-hover: #152a4a;
-  --ap-border: #1a3a5c;
-  --ap-border-light: #253f60;
+  --ap-bg: #0f0f0f;
+  --ap-surface: #1a1a1a;
+  --ap-card: #222222;
+  --ap-card-hover: #2a2a2a;
+  --ap-border: #333333;
+  --ap-border-light: #444444;
   --ap-primary: #C8102E;
   --ap-primary-dark: #A00D22;
   --ap-primary-light: #E8304A;
