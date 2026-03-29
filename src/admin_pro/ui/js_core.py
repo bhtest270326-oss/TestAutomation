@@ -50,7 +50,8 @@ function showSection(name) {
   // Show target section
   const target = document.getElementById('section-' + name);
   if (target) {
-    target.style.display = 'block';
+    // Calendar needs flex layout for proper height containment
+    target.style.display = (name === 'calendar') ? 'flex' : 'block';
   }
 
   // Toggle full-width mode for sections that need it (e.g. calendar)

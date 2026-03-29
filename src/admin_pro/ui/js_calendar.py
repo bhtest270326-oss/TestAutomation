@@ -23,6 +23,28 @@ const CAL_BIZ_START = 8;
 const CAL_BIZ_END = 17;
 const CAL_DEFAULT_DURATION_SLOTS = 4;
 
+// Rim duration table (mirrors maps_handler._RIM_DURATION / _DEFAULT_DURATION)
+const CAL_RIM_DURATION = { 1: 120, 2: 180, 3: 240, 4: 300 };
+const CAL_DEFAULT_DURATION_MIN = 120;
+const CAL_TRAVEL_BUFFER_MIN = 30;
+
+function _calGetJobDurationSlots(bd) {
+  var service = (bd.service_type || '').toLowerCase();
+  if (service === 'paint_touchup') return Math.ceil(60 / 30);
+  var numRims = parseInt(bd.num_rims || bd.rims, 10);
+  var minutes = CAL_DEFAULT_DURATION_MIN;
+  if (numRims > 0) {
+    if (CAL_RIM_DURATION[numRims]) {
+      minutes = CAL_RIM_DURATION[numRims];
+    } else if (numRims > 4) {
+      minutes = 300 + (numRims - 4) * 60;
+    }
+  }
+  // Add travel buffer
+  minutes += CAL_TRAVEL_BUFFER_MIN;
+  return Math.ceil(minutes / 30);
+}
+
 // ── Init ─────────────────────────────────────────────────────
 async function initCalendar() {
   if (!CAL_STATE.weekStart) {
@@ -440,7 +462,8 @@ function _calRenderBookingCard(b, dateStr) {
 
   var slotIndex = _calTimeToSlotIndex(hour, minute);
   var topPx = slotIndex * CAL_SLOT_HEIGHT + (minute % 30) / 30 * CAL_SLOT_HEIGHT;
-  var heightPx = CAL_DEFAULT_DURATION_SLOTS * CAL_SLOT_HEIGHT;
+  var durationSlots = _calGetJobDurationSlots(bd);
+  var heightPx = durationSlots * CAL_SLOT_HEIGHT;
 
   var maxTop = CAL_TOTAL_SLOTS * CAL_SLOT_HEIGHT - heightPx;
   if (topPx > maxTop) topPx = maxTop;
@@ -466,9 +489,11 @@ function _calRenderBookingCard(b, dateStr) {
   html += 'ondragend="calDragEnd(event)" ';
   html += 'onclick="openBookingDetail(\\'' + b.id + '\\')">';
 
+  var rims = bd.num_rims || bd.rims;
+  var rimsStr = rims ? ' · ' + rims + ' rim' + (parseInt(rims, 10) !== 1 ? 's' : '') : '';
   html += '<div class="cal-card-time">' + displayTime + ' ' + badge + '</div>';
   html += '<div class="cal-card-name">' + name + '</div>';
-  html += '<div class="cal-card-info">' + service + '</div>';
+  html += '<div class="cal-card-info">' + service + rimsStr + '</div>';
 
   // Inline confirm/decline for pending bookings
   if (isPending) {
