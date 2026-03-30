@@ -17,11 +17,11 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 DEFAULT_PRICE_MATRIX = {
-    "standard": {"low": 80, "high": 120, "label": "Standard rim repair"},
-    "diamond_cut": {"low": 120, "high": 180, "label": "Diamond cut repair"},
-    "custom_paint": {"low": 150, "high": 250, "label": "Custom paint/respray"},
-    "gutter_rash": {"low": 60, "high": 90, "label": "Gutter rash repair"},
-    "crack_repair": {"low": 100, "high": 160, "label": "Crack repair"},
+    "standard": {"low": 225, "high": 300, "label": "Standard rim repair"},
+    "diamond_cut": {"low": 300, "high": 450, "label": "Diamond cut repair"},
+    "custom_paint": {"low": 350, "high": 500, "label": "Custom paint/respray"},
+    "gutter_rash": {"low": 200, "high": 275, "label": "Gutter rash repair"},
+    "crack_repair": {"low": 275, "high": 400, "label": "Crack repair"},
 }
 
 # Aliases: map common service_type values to matrix keys

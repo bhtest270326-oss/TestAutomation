@@ -22,12 +22,15 @@ _ALLOWED_BOOKING_FIELDS = {
     '_confirmation_pin',
 }
 
+# Fields accepted in requests but not persisted into booking_data
+_META_FIELDS = {'tz'}
+
 
 def _validate_booking_data(data: dict) -> str | None:
     """Validate booking data fields. Returns error message or None if valid."""
     if not isinstance(data, dict):
         return "booking_data must be an object"
-    invalid_keys = set(data.keys()) - _ALLOWED_BOOKING_FIELDS
+    invalid_keys = set(data.keys()) - _ALLOWED_BOOKING_FIELDS - _META_FIELDS
     if invalid_keys:
         return f"Invalid fields: {sorted(invalid_keys)}"
     for k, v in data.items():
@@ -563,7 +566,9 @@ def register(bp, require_auth):
             err = _validate_booking_data(body)
             if err:
                 return jsonify({'ok': False, 'error': err}), 400
-            merged = {**existing_data, **body}
+            # Strip meta fields before persisting
+            persist = {k: v for k, v in body.items() if k not in _META_FIELDS}
+            merged = {**existing_data, **persist}
 
             if status == 'awaiting_owner':
                 state.update_pending_booking_data(booking_id, merged)
