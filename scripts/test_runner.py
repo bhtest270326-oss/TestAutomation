@@ -158,14 +158,17 @@ class _MockLabels:
 
 
 class _MockMessages:
-    def __init__(self, msgs: dict, cap: CallCapture):
+    def __init__(self, msgs: dict, cap: CallCapture, fail_send: bool = False):
         self._msgs = msgs
         self._cap = cap
+        self._fail_send = fail_send
 
     def get(self, userId, id, format="full", **kw):
         return _Exec(self._msgs.get(id, {}))
 
     def send(self, userId, body):
+        if self._fail_send:
+            raise Exception("Simulated Gmail API failure")
         try:
             raw = body.get("raw", "")
             decoded = base64.urlsafe_b64decode(raw).decode(errors="ignore")
@@ -193,9 +196,10 @@ class _MockMessages:
 
 class MockGmailService:
     """Full mock of the Gmail API service object."""
-    def __init__(self, msgs: dict, cap: CallCapture):
+    def __init__(self, msgs: dict, cap: CallCapture, fail_send: bool = False):
         self._msgs = msgs
         self._cap = cap
+        self._fail_send = fail_send
         self._labels = _MockLabels(cap)
         self._drafts = _MockDrafts(cap)
 
@@ -204,7 +208,7 @@ class MockGmailService:
 
         class _U:
             def messages(self2):
-                return _MockMessages(svc._msgs, svc._cap)
+                return _MockMessages(svc._msgs, svc._cap, fail_send=svc._fail_send)
             def labels(self2):
                 return svc._labels
             def drafts(self2):
@@ -296,6 +300,10 @@ class Scenario:
     expect_label:                Optional[str] = None   # label name applied
     expect_booking_note_contains: Optional[str] = None  # substring in booking notes
     expect_waitlist_entry:       bool          = False
+
+    # ── Failure / retry fields ────────────────────────────────────────────────
+    mock_send_raises:            bool          = False  # make Gmail send() raise
+    pre_populate_attempts:       int           = 0      # seed email_processing_attempts
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -766,6 +774,36 @@ SCENARIOS: List[Scenario] = [
         expect_pending_clarification=True,
         expect_processed=True,
     ),
+
+    # ── Failure / retry scenarios ────────────────────────────────────────────
+
+    Scenario(
+        id="email_send_failure",
+        name="[Error] Email send fails → NOT marked processed, retried on next poll",
+        email_body="Hi, I need a rim repair on my Volvo. Jane Smith, Cannington.",
+        extracted_data=PARTIAL_BOOKING.copy(),
+        missing_fields=["Your preferred date"],
+        mock_send_raises=True,
+        expect_booking_created=True,
+        expect_email_sent=False,
+        expect_clarification_email=False,
+        expect_pending_clarification=True,
+        expect_processed=False,
+        expect_label="Pending Reply",
+    ),
+
+    Scenario(
+        id="max_retry_to_dlq",
+        name="[Error] 3+ failed attempts → message sent to DLQ",
+        email_body="Complete booking details here.",
+        extracted_data=FULL_BOOKING.copy(),
+        missing_fields=[],
+        pre_populate_attempts=3,
+        expect_booking_created=False,
+        expect_email_sent=False,
+        expect_processed=True,
+        expect_dlq_entry=True,
+    ),
 ]
 
 
@@ -824,6 +862,19 @@ def _setup_state(state, scenario: Scenario) -> None:
     # Pre-mark as processed (scenario: already_processed)
     if scenario.id == "already_processed":
         state.mark_email_processed(scenario.msg_id)
+
+    # Pre-populate email_processing_attempts for retry scenarios
+    if scenario.pre_populate_attempts > 0:
+        import sqlite3 as _sq
+        db_path = _sm_mod.DB_PATH
+        with _sq.connect(db_path) as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO email_processing_attempts
+                   (msg_id, attempts, last_error, last_attempt_at)
+                   VALUES (?, ?, ?, ?)""",
+                (scenario.msg_id, scenario.pre_populate_attempts,
+                 "Prior simulated failure", __import__("datetime").datetime.utcnow().isoformat()),
+            )
 
 
 def _insert_prior_booking(state, scenario: Scenario) -> None:
@@ -945,7 +996,7 @@ def run_scenario(scenario: Scenario, verbose: bool = False) -> tuple:
         scenario.customer_email, scenario.email_subject,
         scenario.email_body, scenario.label_ids,
     )
-    svc = MockGmailService({scenario.msg_id: msg}, cap)
+    svc = MockGmailService({scenario.msg_id: msg}, cap, fail_send=scenario.mock_send_raises)
 
     # ── Mock functions ────────────────────────────────────────────────────────
 
@@ -1089,6 +1140,8 @@ def run_scenario(scenario: Scenario, verbose: bool = False) -> tuple:
 
     if scenario.expect_processed:
         check(is_processed, "Message should be marked processed")
+    else:
+        check(not is_processed, "Message should NOT be marked processed")
 
     # Email sent to customer
     customer_emails = [e for e in cap.emails_sent
