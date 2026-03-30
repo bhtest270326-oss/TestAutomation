@@ -773,16 +773,33 @@ For vehicle_year:
 - Extract the year of the vehicle if mentioned (e.g. "2019 BMW", "my 2021 Hilux")
 - Required — if not provided, include 'the year of your vehicle' in missing_fields
 
-For preferred_date and alternative_dates:
+For preferred_date:
 - Today is {today}. Work out exact calendar dates from that anchor — do not guess or round.
 - "Tuesday" or "next Tuesday" means the very next Tuesday after today. If today IS Tuesday, it means today. Never skip to the following week unless the customer says "the week after" or "in two weeks".
-- When a customer names SPECIFIC days as options (e.g. "Tuesday or Wednesday", "Monday, Wednesday or Friday"), set preferred_date to the EARLIEST of those days (as actual YYYY-MM-DD dates) and put the remaining days in alternative_dates in order. ONLY include days the customer explicitly named — never add extra days they did not mention.
-- Double-check your dates: if today is Friday 27 March 2026 and the customer says "Tuesday or Wednesday", the answer is preferred_date=2026-03-31, alternative_dates=["2026-04-01"]. Not April 2. Not any other day.
-- Only set preferred_date if the customer names a specific date (e.g. "March 31", "the 5th") or a specific named day (e.g. "next Thursday", "this Friday", "Tuesday"). Never infer or assume a date from a vague timeframe.
-- If the customer says anything vague — "anytime next week", "as soon as possible", "whenever you're free", "any day", "next week", or similar — set preferred_date to null and leave alternative_dates empty. The system will ask for a specific date separately.
+- When a customer names SPECIFIC days as options (e.g. "Tuesday or Wednesday", "Monday, Wednesday or Friday"), set preferred_date to the EARLIEST of those days (as actual YYYY-MM-DD dates). ONLY include days the customer explicitly named — never add extra days they did not mention.
+- Double-check your dates: if today is Friday 27 March 2026 and the customer says "Tuesday or Wednesday", the answer is preferred_date=2026-03-31. Not April 2. Not any other day.
 - Never pick a day of the week that the customer did not explicitly mention or imply
 - If they say "morning" use 09:00, "afternoon" use 13:00, "end of day" use 16:00
 - If they give a time window like "between 9am and 5pm", use 09:00 as preferred_time and note the window in notes
+
+RESOLVABLE vs VAGUE date expressions — follow these rules exactly:
+  RESOLVABLE (extract as a real YYYY-MM-DD date):
+    - A named day of the week: "next Monday", "this Friday", "Tuesday" → compute the actual date
+    - A calendar date: "March 31", "the 5th", "01/04" → convert to YYYY-MM-DD
+    - "tomorrow", "day after tomorrow" → compute from today
+    Examples: "Can you come next Monday?" → preferred_date = the next Monday's date
+              "How about this Friday?" → preferred_date = the coming Friday's date
+              "Tuesday or Wednesday" → preferred_date = the earlier date
+
+  VAGUE (set preferred_date to null, mark as missing):
+    - "sometime next week", "anytime next week", "next week" (no specific day)
+    - "as soon as possible", "ASAP", "whenever you're free"
+    - "any day", "anytime", "whenever works", "when are you available?"
+    - "soon", "this week sometime", "in the next few days"
+    Examples: "Anytime next week works for me" → preferred_date = null
+              "Whenever you're free" → preferred_date = null
+              "Can you come sometime this week?" → preferred_date = null
+
 - Mark preferred_date as missing (null) if the customer gives no date, a vague timeframe, or says "any time"
 
 <customer_message>
@@ -861,7 +878,6 @@ def extract_booking_details(message_body, subject="", customer_email=""):
                     "service_type": {"type": "string", "enum": ["rim_repair", "paint_touchup", "multiple_rims", "unknown"]},
                     "num_rims": {"type": ["integer", "null"], "description": "Number of rims to repair"},
                     "preferred_date": {"type": ["string", "null"], "description": "Preferred date in YYYY-MM-DD format"},
-                    "alternative_dates": {"type": "array", "items": {"type": "string"}, "description": "Alternative dates in YYYY-MM-DD format"},
                     "preferred_time": {"type": ["string", "null"], "description": "Preferred time in HH:MM format"},
                     "address": {"type": ["string", "null"], "description": "Full service address"},
                     "suburb": {"type": ["string", "null"], "description": "Suburb name"},
@@ -869,7 +885,7 @@ def extract_booking_details(message_body, subject="", customer_email=""):
                     "missing_fields": {"type": "array", "items": {"type": "string"}, "description": "List of required fields not provided, in plain English"},
                     "confidence": {"type": "string", "enum": ["high", "medium", "low"]}
                 },
-                "required": ["service_type", "alternative_dates", "missing_fields", "confidence"]
+                "required": ["service_type", "missing_fields", "confidence"]
             }
         }
 
@@ -915,11 +931,24 @@ def extract_booking_details(message_body, subject="", customer_email=""):
             if mf
         ]
 
-        # Confidence gate
+        # Confidence-based clarification gating
+        # - low  (< 0.6 equivalent): mark for manual review, force clarification
+        # - medium (0.6–0.79 equivalent): normal flow, clarify missing required fields
+        # - high (>= 0.8 equivalent): skip clarification for optional fields
         confidence = booking_data.get('confidence', 'medium')
         if confidence == 'low':
             booking_data['low_confidence'] = True
-            logger.warning(f"Low-confidence extraction for {customer_email} — booking data may be incomplete")
+            booking_data['needs_manual_review'] = True
+            logger.warning(f"Low-confidence extraction for {customer_email} — marking for manual review")
+        elif confidence == 'high':
+            # High confidence: remove optional fields from missing_fields
+            # so the system does not ask the customer for them
+            _OPTIONAL_FIELDS_KEYWORDS = {'time', 'colour', 'color', 'note', 'notes'}
+            missing_fields = [
+                f for f in missing_fields
+                if not any(kw in f.lower() for kw in _OPTIONAL_FIELDS_KEYWORDS)
+            ]
+            logger.info(f"High-confidence extraction — skipping clarification for optional fields")
 
         # service_type must be one of the allowed values
         _allowed_services = {'rim_repair', 'paint_touchup', 'multiple_rims', 'unknown'}
@@ -937,19 +966,8 @@ def extract_booking_details(message_body, subject="", customer_email=""):
                     logger.warning(f"Invalid {_df} format '{val}' — clearing")
                     booking_data[_df] = None
 
-        # alternative_dates must be a list of valid YYYY-MM-DD strings
-        alt = booking_data.get('alternative_dates')
-        if not isinstance(alt, list):
-            booking_data['alternative_dates'] = []
-        else:
-            clean_alt = []
-            for d in alt:
-                try:
-                    datetime.strptime(d, '%Y-%m-%d')
-                    clean_alt.append(d)
-                except (ValueError, TypeError):
-                    pass
-            booking_data['alternative_dates'] = clean_alt
+        # Remove alternative_dates if AI still returns it (field removed from schema)
+        booking_data.pop('alternative_dates', None)
 
         # preferred_time must be HH:MM
         pt = booking_data.get('preferred_time')
@@ -996,7 +1014,8 @@ def extract_booking_details(message_body, subject="", customer_email=""):
         if customer_email:
             booking_data['customer_email'] = customer_email
 
-        needs_clarification = len(missing_fields) > 0
+        # Low confidence forces clarification even if no fields are missing
+        needs_clarification = len(missing_fields) > 0 or confidence == 'low'
         # NOTE: 'confidence' is NOT stripped here — booking_data is returned as-is so the
         # caller receives the AI's confidence field ('high'/'medium'/'low') unchanged.
         logger.info(f"Extracted booking: confidence={booking_data.get('confidence')}, missing={missing_fields}")
@@ -1031,7 +1050,6 @@ def parse_owner_correction(original_booking, correction_text, slot_hint=None):
                     "service_type": {"type": "string", "enum": ["rim_repair", "paint_touchup", "multiple_rims", "unknown"]},
                     "num_rims": {"type": ["integer", "null"], "description": "Number of rims to repair"},
                     "preferred_date": {"type": ["string", "null"], "description": "Preferred date in YYYY-MM-DD format"},
-                    "alternative_dates": {"type": "array", "items": {"type": "string"}, "description": "Alternative dates in YYYY-MM-DD format"},
                     "preferred_time": {"type": ["string", "null"], "description": "Preferred time in HH:MM format"},
                     "address": {"type": ["string", "null"], "description": "Full service address"},
                     "suburb": {"type": ["string", "null"], "description": "Suburb name"},
@@ -1039,7 +1057,7 @@ def parse_owner_correction(original_booking, correction_text, slot_hint=None):
                     "missing_fields": {"type": "array", "items": {"type": "string"}, "description": "List of required fields not provided, in plain English"},
                     "confidence": {"type": "string", "enum": ["high", "medium", "low"]}
                 },
-                "required": ["service_type", "alternative_dates", "missing_fields", "confidence"]
+                "required": ["service_type", "missing_fields", "confidence"]
             }
         }
 
