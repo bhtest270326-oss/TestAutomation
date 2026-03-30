@@ -23,6 +23,15 @@ admin_pro_bp = Blueprint('admin_pro', __name__, url_prefix='/v2')
 _SESSIONS: dict = {}
 _SESSION_TTL = 28800  # 8 hours
 
+# Clear all persisted IP blocks on startup — a fresh deploy should unblock admins
+try:
+    from state_manager import _get_conn
+    with _get_conn() as _conn:
+        _conn.execute("DELETE FROM app_state WHERE key LIKE 'ratelimit_%'")
+    logger.info("Cleared persisted rate-limit blocks on startup")
+except Exception:
+    pass
+
 # ---------------------------------------------------------------------------
 # Simple in-memory rate limiter for brute-force protection.
 # Tracks failed auth attempts per IP: {ip: [timestamp, ...]}
@@ -95,6 +104,13 @@ def _rate_limit_clear(ip: str) -> None:
     """Clear failure history for *ip* after a successful authentication."""
     _rate_fail_times.pop(ip, None)
     _rate_blocked_until.pop(ip, None)
+    # Also remove the persisted SQLite block so it doesn't reappear after restart
+    try:
+        from state_manager import _get_conn
+        with _get_conn() as conn:
+            conn.execute("DELETE FROM app_state WHERE key=?", (f"ratelimit_{ip}",))
+    except Exception:
+        pass
 
 
 def _create_session() -> str:
@@ -213,8 +229,19 @@ def require_auth(f):
             _rate_limit_clear(client_ip)
             return f(*args, **kwargs)
 
-        # Unauthorized — record failure for rate limiting
-        _rate_limit_record_failure(client_ip)
+        # Only record a rate-limit failure when credentials were actually
+        # presented but wrong (brute-force protection).  Missing credentials
+        # (e.g. API calls without a session cookie) should NOT count — the
+        # dashboard fires 12+ parallel API calls on initial load, and
+        # counting each as a failure would instantly block the admin.
+        _creds_were_attempted = bool(
+            request.authorization  # Basic Auth header present
+            or request.args.get('token')
+            or request.headers.get('X-Admin-Token')
+        )
+        if _creds_were_attempted:
+            _rate_limit_record_failure(client_ip)
+
         response = make_response(
             jsonify({'ok': False, 'error': 'Unauthorized'}),
             401
