@@ -715,16 +715,15 @@ SCENARIOS: List[Scenario] = [
         # Service history pre-inserted in runner
     ),
 
-    # ── Multiple alternative dates ────────────────────────────────────────────
+    # ── Customer provides multiple date options → earliest preferred ─────────
 
     Scenario(
-        id="alternative_dates",
-        name="[Dates] Customer provides alternative dates → best slot assigned",
+        id="multiple_date_options",
+        name="[Dates] Customer provides multiple date options → earliest preferred",
         email_body="10 April or 11 April, Jane Smith, Cannington, Volvo XC60.",
         extracted_data={
             **FULL_BOOKING,
             "preferred_date":    "2026-04-10",
-            "alternative_dates": ["2026-04-11"],
         },
         missing_fields=[],
         expect_booking_created=True,

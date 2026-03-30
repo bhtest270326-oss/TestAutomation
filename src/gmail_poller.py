@@ -584,8 +584,7 @@ def process_history_notification(new_history_id):
 def _assign_best_slot(booking_data, state):
     """Compute the next available slot on the requested date and update booking_data in place.
 
-    Tries preferred_date first, then alternative_dates in order (customer's stated options),
-    then falls back to next business day only if none of the preferred dates have room.
+    Tries preferred_date first, then falls back to next business day if no room.
     The customer's original preference is preserved in notes if the date changes.
     """
     target_date = booking_data.get('preferred_date')
@@ -597,40 +596,16 @@ def _assign_best_slot(booking_data, state):
         job_address = booking_data.get('address') or booking_data.get('suburb') or ''
         original_time = booking_data.get('preferred_time')
 
-        # Build the ordered list of dates the customer is happy with
-        alternative_dates = booking_data.get('alternative_dates') or []
-        preferred_dates = [target_date] + [d for d in alternative_dates if d and d != target_date]
-
-        found_date = None
-        found_time = None
-
-        for candidate_date in preferred_dates:
-            # Include awaiting_owner bookings so pending jobs consume capacity
-            # and don't allow two unconfirmed bookings to claim the same slot.
-            confirmed = state.get_confirmed_bookings_for_date(candidate_date)
-            pending = state.get_pending_bookings_for_date(candidate_date)
-            day_bookings = confirmed + pending
-            slot_date, slot_time = find_next_available_slot(
-                candidate_date, job_address, day_bookings, new_booking_data=booking_data
-            )
-            # find_next_available_slot advances to next business day if no room —
-            # only accept the result if it actually landed on the candidate date
-            if slot_date == candidate_date:
-                found_date = slot_date
-                found_time = slot_time
-                break
-
-        # None of the preferred dates had room — fall back to next business day
-        if not found_date:
-            confirmed = state.get_confirmed_bookings_for_date(target_date)
-            pending = state.get_pending_bookings_for_date(target_date)
-            found_date, found_time = find_next_available_slot(
-                target_date, job_address, confirmed + pending, new_booking_data=booking_data
-            )
+        # Try the preferred date first
+        confirmed = state.get_confirmed_bookings_for_date(target_date)
+        pending = state.get_pending_bookings_for_date(target_date)
+        day_bookings = confirmed + pending
+        found_date, found_time = find_next_available_slot(
+            target_date, job_address, day_bookings, new_booking_data=booking_data
+        )
 
         if found_date != target_date or found_time != original_time:
-            pref_days = ', '.join(preferred_dates) if len(preferred_dates) > 1 else target_date
-            pref_note = f"Customer requested {pref_days} around {original_time or 'any time'}"
+            pref_note = f"Customer requested {target_date} around {original_time or 'any time'}"
             existing_notes = booking_data.get('notes') or ''
             booking_data['notes'] = f"{pref_note}. {existing_notes}".strip('. ') if existing_notes else pref_note
 
