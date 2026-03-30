@@ -2,7 +2,6 @@ import re
 import logging
 
 from flask import Blueprint, jsonify, request
-from admin_pro.api import api_response
 
 logger = logging.getLogger(__name__)
 
@@ -52,10 +51,10 @@ def register(bp, require_auth):
                     }
                 )
 
-            return api_response(data={"messages": messages})
+            return jsonify({"messages": messages, "error": None})
         except Exception:
             logger.exception("comms_gmail error detail")
-            return api_response(error="Gmail unavailable", code="SERVICE_UNAVAILABLE", status=503)
+            return jsonify({"messages": [], "error": "Gmail unavailable"}), 503
 
     # ------------------------------------------------------------------
     # GET /api/comms/dlq
@@ -85,10 +84,10 @@ def register(bp, require_auth):
                 }
                 for row in rows
             ]
-            return api_response(data={"entries": entries})
+            return jsonify({"entries": entries})
         except Exception:
             logger.exception("comms_dlq error")
-            return api_response(error="Failed to fetch DLQ entries", code="INTERNAL_ERROR", status=500)
+            return jsonify({"entries": [], "error": "Failed to fetch DLQ entries"})
 
     # ------------------------------------------------------------------
     # POST /api/comms/dlq/<msg_id>/dismiss
@@ -104,10 +103,10 @@ def register(bp, require_auth):
                     "UPDATE failed_extractions SET owner_notified=1 WHERE gmail_msg_id=?",
                     (msg_id,),
                 )
-            return api_response()
+            return jsonify({"ok": True})
         except Exception:
             logger.exception("comms_dlq_dismiss error for %s", msg_id)
-            return api_response(error="Failed to dismiss entry", code="INTERNAL_ERROR", status=500)
+            return jsonify({"ok": False, "error": "Failed to dismiss entry"})
 
     # ------------------------------------------------------------------
     # POST /api/comms/sms
@@ -121,20 +120,20 @@ def register(bp, require_auth):
             message = body.get("message", "").strip()
 
             if not to or not message:
-                return api_response(error="Both 'to' and 'message' are required", code="VALIDATION_ERROR", status=400)
+                return jsonify({"ok": False, "error": "Both 'to' and 'message' are required"}), 400
 
             if not re.match(r'^\+?61[45]\d{8}$', to.replace(' ', '')):
-                return api_response(error="Invalid Australian mobile number", code="VALIDATION_ERROR", status=400)
+                return jsonify({"ok": False, "error": "Invalid Australian mobile number"}), 400
             if len(message) > 1600:
-                return api_response(error="Message too long (max 1600 chars)", code="VALIDATION_ERROR", status=400)
+                return jsonify({"ok": False, "error": "Message too long (max 1600 chars)"}), 400
 
             from twilio_handler import send_sms
 
             send_sms(to, message)
-            return api_response()
+            return jsonify({"ok": True})
         except Exception:
             logger.exception("comms_send_sms error")
-            return api_response(error="Failed to send SMS", code="INTERNAL_ERROR", status=500)
+            return jsonify({"ok": False, "error": "Failed to send SMS"})
 
     # ------------------------------------------------------------------
     # GET /api/comms/clarifications
@@ -161,10 +160,10 @@ def register(bp, require_auth):
                 }
                 for row in rows
             ]
-            return api_response(data={"clarifications": clarifications})
+            return jsonify({"clarifications": clarifications})
         except Exception:
             logger.exception("comms_clarifications error")
-            return api_response(error="Failed to fetch clarifications", code="INTERNAL_ERROR", status=500)
+            return jsonify({"clarifications": [], "error": "Failed to fetch clarifications"})
 
     # ------------------------------------------------------------------
     # GET /api/comms/waitlist
@@ -174,27 +173,28 @@ def register(bp, require_auth):
     def comms_waitlist():
         try:
             from state_manager import _get_conn
+            import json as _json
 
             with _get_conn() as conn:
                 rows = conn.execute(
                     "SELECT * FROM waitlist ORDER BY created_at DESC"
                 ).fetchall()
 
-            waitlist = [
-                {
-                    "id": row["id"],
-                    "customer_email": row["customer_email"],
-                    "customer_name": row["customer_name"],
-                    "requested_date": row["requested_date"],
-                    "notified": row["notified"],
-                    "created_at": row["created_at"],
-                }
-                for row in rows
-            ]
-            return api_response(data={"waitlist": waitlist})
+            waitlist = []
+            for row in rows:
+                entry = dict(row)
+                # Parse preferred_dates JSON
+                raw_dates = entry.get('preferred_dates')
+                if raw_dates and isinstance(raw_dates, str):
+                    try:
+                        entry['preferred_dates'] = _json.loads(raw_dates)
+                    except (ValueError, TypeError):
+                        entry['preferred_dates'] = []
+                waitlist.append(entry)
+            return jsonify({"waitlist": waitlist})
         except Exception:
             logger.exception("comms_waitlist error")
-            return api_response(error="Failed to fetch waitlist", code="INTERNAL_ERROR", status=500)
+            return jsonify({"waitlist": [], "error": "Failed to fetch waitlist"})
 
     # ------------------------------------------------------------------
     # POST /api/comms/waitlist/<waitlist_id>/notify
@@ -203,82 +203,13 @@ def register(bp, require_auth):
     @require_auth
     def comms_waitlist_notify(waitlist_id):
         try:
-            from state_manager import _get_conn
-
-            with _get_conn() as conn:
-                conn.execute(
-                    "UPDATE waitlist SET notified=1 WHERE id=?",
-                    (waitlist_id,),
-                )
-            return api_response()
+            from state_manager import StateManager
+            state = StateManager()
+            state.update_waitlist_status(waitlist_id, 'offered')
+            return jsonify({"ok": True})
         except Exception:
             logger.exception("comms_waitlist_notify error for id %s", waitlist_id)
-            return api_response(error="Failed to update waitlist entry", code="INTERNAL_ERROR", status=500)
-
-    # ------------------------------------------------------------------
-    # GET /api/comms/sms/templates
-    # ------------------------------------------------------------------
-    @bp.route("/api/comms/sms/templates", methods=["GET"])
-    @require_auth
-    def comms_sms_templates():
-        from twilio_handler import SMS_TEMPLATES
-
-        templates = [
-            {"key": key, "label": t["label"], "body": t["body"]}
-            for key, t in SMS_TEMPLATES.items()
-        ]
-        return jsonify({"templates": templates})
-
-    # ------------------------------------------------------------------
-    # POST /api/comms/sms/send-template
-    # ------------------------------------------------------------------
-    @bp.route("/api/comms/sms/send-template", methods=["POST"])
-    @require_auth
-    def comms_sms_send_template():
-        from twilio_handler import SMS_TEMPLATES, send_sms
-        import json
-
-        body = request.get_json(force=True) or {}
-        booking_id = body.get("booking_id")
-        template_key = body.get("template_key", "")
-        variables = body.get("variables") or {}
-
-        if not booking_id or not template_key:
-            return jsonify({"ok": False, "error": "'booking_id' and 'template_key' are required"}), 400
-
-        template = SMS_TEMPLATES.get(template_key)
-        if not template:
-            return jsonify({"ok": False, "error": f"Unknown template: {template_key}"}), 400
-
-        try:
-            from state_manager import _get_conn
-
-            with _get_conn() as conn:
-                row = conn.execute(
-                    "SELECT booking_data FROM bookings WHERE id=?", (booking_id,)
-                ).fetchone()
-            if not row:
-                return jsonify({"ok": False, "error": f"Booking {booking_id} not found"}), 404
-
-            bd = json.loads(row["booking_data"]) if isinstance(row["booking_data"], str) else row["booking_data"]
-            phone = bd.get("customer_phone", "")
-            if not phone:
-                return jsonify({"ok": False, "error": "Booking has no customer phone number"}), 400
-
-            # Merge booking data defaults with caller-supplied overrides
-            fill = {"customer_name": bd.get("customer_name", "there")}
-            fill.update(variables)
-
-            try:
-                message = template["body"].format(**fill)
-            except KeyError as ke:
-                return jsonify({"ok": False, "error": f"Missing variable: {ke}"}), 400
-
-            send_sms(phone, message)
-            return jsonify({"ok": True, "message": message})
-        except Exception:
-            logger.exception("comms_sms_send_template error")
-            return jsonify({"ok": False, "error": "Failed to send template SMS"})
+            return jsonify({"ok": False, "error": "Failed to update waitlist entry"})
 
     # ------------------------------------------------------------------
     # GET /api/comms/sms/log
@@ -300,9 +231,9 @@ def register(bp, require_auth):
                     (limit,),
                 ).fetchall()
             logs = [dict(row) for row in rows]
-            return api_response(data={"logs": logs})
+            return jsonify({"logs": logs})
         except Exception:
-            return api_response(data={"logs": []})
+            return jsonify({"logs": []})
 
     # ------------------------------------------------------------------
     # GET /api/comms/activity
@@ -342,10 +273,10 @@ def register(bp, require_auth):
                 }
                 for row in rows
             ]
-            return api_response(data={"events": events})
+            return jsonify({"events": events})
         except Exception:
             logger.exception("comms_activity error")
-            return api_response(error="Failed to fetch activity", code="INTERNAL_ERROR", status=500)
+            return jsonify({"events": [], "error": "Failed to fetch activity"})
 
 
 # Self-registration when module is imported directly

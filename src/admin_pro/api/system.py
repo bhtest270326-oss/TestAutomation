@@ -8,7 +8,6 @@ import sqlite3
 import logging
 
 from flask import jsonify, request
-from admin_pro.api import api_response
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +77,7 @@ def register(bp, require_auth):
         result['uptime_info'] = {'pubsub_mode': pubsub_mode}
 
         result['status'] = 'ok'
-        return api_response(data=result)
+        return jsonify(result)
 
     # ------------------------------------------------------------------
     # GET /api/system/flags
@@ -89,10 +88,10 @@ def register(bp, require_auth):
     def get_flags():
         try:
             from feature_flags import get_all_flags
-            return api_response(data={'flags': get_all_flags()})
+            return jsonify({'flags': get_all_flags()})
         except Exception:
             logger.exception('get_flags error')
-            return api_response(error='Internal server error', code='INTERNAL_ERROR', status=500)
+            return jsonify({'ok': False, 'error': 'Internal server error'}), 500
 
     # ------------------------------------------------------------------
     # POST /api/system/flags/<key>
@@ -104,14 +103,14 @@ def register(bp, require_auth):
         try:
             from feature_flags import set_flag, FLAGS
             if key not in FLAGS:
-                return api_response(error=f'Unknown flag: {key}', code='NOT_FOUND', status=400)
+                return jsonify({'ok': False, 'error': f'Unknown flag: {key}'}), 400
             body = request.get_json(force=True, silent=True) or {}
             enabled = bool(body.get('enabled', True))
             set_flag(key, enabled)
-            return api_response(data={'key': key, 'enabled': enabled})
+            return jsonify({'ok': True, 'key': key, 'enabled': enabled})
         except Exception:
             logger.exception('set_flag error')
-            return api_response(error='Internal server error', code='INTERNAL_ERROR', status=500)
+            return jsonify({'ok': False, 'error': 'Internal server error'}), 500
 
     # ------------------------------------------------------------------
     # GET /api/system/db-stats
@@ -146,10 +145,10 @@ def register(bp, require_auth):
                 tables.append({'name': name, 'count': count})
                 total_rows += count
             conn.close()
-            return api_response(data={'tables': tables, 'total_rows': total_rows})
+            return jsonify({'tables': tables, 'total_rows': total_rows})
         except Exception:
             logger.exception('db_stats error')
-            return api_response(error='Internal server error', code='INTERNAL_ERROR', status=500)
+            return jsonify({'ok': False, 'error': 'Internal server error'}), 500
 
     # ------------------------------------------------------------------
     # POST /api/system/cancel-day
@@ -163,14 +162,14 @@ def register(bp, require_auth):
             date = body.get('date', '').strip()
             reason = body.get('reason', '').strip()
             if not date:
-                return api_response(error='date is required', code='VALIDATION_ERROR', status=400)
+                return jsonify({'ok': False, 'error': 'date is required'}), 400
             from state_manager import StateManager
             state = StateManager()
             cancelled = state.cancel_all_bookings_for_date(date, reason, 'owner_ui')
-            return api_response(data={'cancelled': len(cancelled), 'booking_ids': cancelled})
+            return jsonify({'ok': True, 'cancelled': len(cancelled), 'booking_ids': cancelled})
         except Exception:
             logger.exception('cancel_day error')
-            return api_response(error='Internal server error', code='INTERNAL_ERROR', status=500)
+            return jsonify({'ok': False, 'error': 'Internal server error'}), 500
 
     # ------------------------------------------------------------------
     # GET /api/system/app-state
@@ -185,10 +184,10 @@ def register(bp, require_auth):
             rows = conn.execute('SELECT key, value FROM app_state ORDER BY key').fetchall()
             conn.close()
             state = {row['key']: row['value'] for row in rows}
-            return api_response(data={'state': state})
+            return jsonify({'state': state})
         except Exception:
             logger.exception('get_app_state error')
-            return api_response(error='Internal server error', code='INTERNAL_ERROR', status=500)
+            return jsonify({'ok': False, 'error': 'Internal server error'}), 500
 
     # ------------------------------------------------------------------
     # POST /api/system/app-state/<key>
@@ -201,15 +200,15 @@ def register(bp, require_auth):
     def set_app_state_route(key):
         try:
             if any(key == bk or key.startswith(bk) for bk in _BLOCKED_STATE_KEYS):
-                return api_response(error='This key cannot be modified via API', code='FORBIDDEN', status=403)
+                return jsonify({'ok': False, 'error': 'This key cannot be modified via API'}), 403
             body = request.get_json(force=True, silent=True) or {}
             value = body.get('value', '')
             from state_manager import StateManager
             StateManager().set_app_state(key, value)
-            return api_response(data={'key': key, 'value': value})
+            return jsonify({'ok': True, 'key': key, 'value': value})
         except Exception:
             logger.exception('set_app_state error')
-            return api_response(error='Internal server error', code='INTERNAL_ERROR', status=500)
+            return jsonify({'ok': False, 'error': 'Internal server error'}), 500
 
     # ------------------------------------------------------------------
     # GET /api/system/waitlist
@@ -226,10 +225,10 @@ def register(bp, require_auth):
         try:
             from backup_handler import get_backup_status
             status = get_backup_status()
-            return api_response(data=status)
+            return jsonify(status)
         except Exception:
             logger.exception("Error fetching backup status")
-            return api_response(error="Internal server error", code="INTERNAL_ERROR", status=500)
+            return jsonify({"error": "Internal server error"}), 500
 
     # ------------------------------------------------------------------
     # POST /api/system/backup-now
@@ -242,10 +241,10 @@ def register(bp, require_auth):
         try:
             from backup_handler import backup_database_to_drive
             result = backup_database_to_drive()
-            return api_response(data=result)
+            return jsonify(result)
         except Exception:
             logger.exception("Error triggering backup")
-            return api_response(error="Internal server error", code="INTERNAL_ERROR", status=500)
+            return jsonify({"ok": False, "error": "Internal server error"}), 500
 
     # ------------------------------------------------------------------
     # GET /api/system/waitlist
@@ -255,17 +254,27 @@ def register(bp, require_auth):
     @require_auth
     def get_waitlist():
         try:
+            import json as _json
             conn = sqlite3.connect(DB_PATH, timeout=5)
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 'SELECT * FROM waitlist ORDER BY created_at DESC'
             ).fetchall()
             conn.close()
-            entries = [dict(row) for row in rows]
-            return api_response(data={'waitlist': entries, 'total': len(entries)})
+            entries = []
+            for row in rows:
+                entry = dict(row)
+                raw_dates = entry.get('preferred_dates')
+                if raw_dates and isinstance(raw_dates, str):
+                    try:
+                        entry['preferred_dates'] = _json.loads(raw_dates)
+                    except (ValueError, TypeError):
+                        entry['preferred_dates'] = []
+                entries.append(entry)
+            return jsonify({'waitlist': entries, 'total': len(entries)})
         except Exception:
             logger.exception('get_waitlist error')
-            return api_response(error='Internal server error', code='INTERNAL_ERROR', status=500)
+            return jsonify({'ok': False, 'error': 'Internal server error'}), 500
 
     # ------------------------------------------------------------------
     # GET /api/system/metrics  — Performance metrics dashboard
