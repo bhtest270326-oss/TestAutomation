@@ -1,14 +1,19 @@
 import os
 import logging
 import math
-import re
 import time
 import datetime as _dt_mod
 import requests
 from datetime import datetime, timedelta, timezone
 from itertools import permutations as _perms
 
+from circuit_breaker import CircuitBreaker, CircuitOpenError
+from error_codes import ErrorCode
+
 logger = logging.getLogger(__name__)
+
+# Circuit breaker for Google Maps API calls
+_maps_cb = CircuitBreaker("google_maps", failure_threshold=5, recovery_timeout=300)
 
 # WA Public Holidays — update annually
 _WA_PUBLIC_HOLIDAYS: set = {
@@ -73,26 +78,9 @@ _WA_PUBLIC_HOLIDAYS: set = {
 }
 
 
-def _get_holidays() -> set:
-    """Return WA public holidays, merging DB overrides with hardcoded defaults.
-
-    The holidays table in the DB (if populated) takes priority and allows
-    adding/removing holidays without redeployment. Falls back to the
-    hardcoded _WA_PUBLIC_HOLIDAYS set when the DB has no entries.
-    """
-    try:
-        from state_manager import StateManager
-        db_holidays = StateManager().get_db_holidays()
-        if db_holidays:
-            return db_holidays | _WA_PUBLIC_HOLIDAYS
-    except Exception:
-        pass
-    return _WA_PUBLIC_HOLIDAYS
-
-
 def _is_business_day(d: _dt_mod.date) -> bool:
     """Return True if d is a weekday that is not a WA public holiday."""
-    return d.weekday() < 5 and d not in _get_holidays()
+    return d.weekday() < 5 and d not in _WA_PUBLIC_HOLIDAYS
 
 
 def _ceil_15(dt):
@@ -122,24 +110,6 @@ _matrix_cache: dict = {}       # key -> matrix
 _matrix_cache_ts: dict = {}    # key -> float timestamp
 _MATRIX_CACHE_TTL = 1800       # 30 minutes
 
-# Point-to-point travel time cache (same TTL as matrix cache)
-_travel_cache: dict = {}       # cache_key -> travel minutes
-_travel_cache_ts: dict = {}    # cache_key -> float timestamp
-
-# Consecutive API failure tracking
-_consecutive_failures = 0
-
-# Rate limiter: sliding window of request timestamps
-_rate_limit_timestamps: list = []
-_RATE_LIMIT_MAX = 50       # max requests
-_RATE_LIMIT_WINDOW = 60    # per 60 seconds
-
-# Address abbreviation mapping for normalization
-_ABBREV_MAP = {
-    'rd': 'road', 'st': 'street', 'ave': 'avenue', 'dr': 'drive',
-    'crt': 'court', 'cres': 'crescent', 'pl': 'place', 'tce': 'terrace',
-}
-
 # Week availability in-memory cache
 _avail_cache: dict = {}
 _avail_cache_ts: dict = {}
@@ -162,54 +132,6 @@ def _prune_caches():
     for k in expired:
         _avail_cache.pop(k, None)
         _avail_cache_ts.pop(k, None)
-    expired = [k for k, ts in _travel_cache_ts.items() if now - ts > _MATRIX_CACHE_TTL]
-    for k in expired:
-        _travel_cache.pop(k, None)
-        _travel_cache_ts.pop(k, None)
-
-
-def _normalize_address(addr: str) -> str:
-    """Lowercase, strip whitespace, and expand common street abbreviations."""
-    if not addr:
-        return ''
-    s = ' '.join(addr.lower().split())  # collapse whitespace
-    # Replace abbreviations at word boundaries
-    for abbr, full in _ABBREV_MAP.items():
-        s = re.sub(r'\b' + abbr + r'\b', full, s)
-    return s
-
-
-def _check_rate_limit() -> bool:
-    """Return True if we are within the rate limit, False if exceeded."""
-    now = time.time()
-    cutoff = now - _RATE_LIMIT_WINDOW
-    # Remove timestamps outside the window
-    while _rate_limit_timestamps and _rate_limit_timestamps[0] < cutoff:
-        _rate_limit_timestamps.pop(0)
-    return len(_rate_limit_timestamps) < _RATE_LIMIT_MAX
-
-
-def _record_api_call():
-    """Record a Maps API call timestamp for rate limiting."""
-    _rate_limit_timestamps.append(time.time())
-
-
-def _record_api_success():
-    """Reset consecutive failure counter on success."""
-    global _consecutive_failures
-    _consecutive_failures = 0
-
-
-def _record_api_failure():
-    """Increment consecutive failure counter; log error at threshold."""
-    global _consecutive_failures
-    _consecutive_failures += 1
-    if _consecutive_failures == 5:
-        logger.error(
-            f"Google Maps API: {_consecutive_failures} consecutive failures — "
-            "API may be down or misconfigured"
-        )
-
 
 # Known out-of-area Western Australian locations (outside Perth metro)
 _OUT_OF_AREA_KEYWORDS = [
@@ -287,21 +209,14 @@ def get_travel_minutes(origin: str, destination: str, departure_dt=None) -> int:
         dep_key = departure_dt.strftime(f'%Y%m%d%H') + f'{rounded_min:02d}'
     else:
         dep_key = 'nodep'
-    cache_key = (_normalize_address(origin), _normalize_address(destination), dep_key)
-
-    # Check travel cache
-    _prune_caches()
-    now = time.time()
-    if cache_key in _travel_cache and now - _travel_cache_ts.get(cache_key, 0) < _MATRIX_CACHE_TTL:
-        logger.debug(f"Travel cache hit: {origin} → {destination}")
-        return _travel_cache[cache_key]
-
-    # Check rate limit — return cached value if available, else default
-    if not _check_rate_limit():
-        logger.warning("Maps API rate limit exceeded — using fallback travel time of 30 min")
-        return _travel_cache.get(cache_key, 30)
+    cache_key = (origin.lower().strip(), destination.lower().strip(), dep_key)
 
     try:
+        # Check circuit breaker before making the API call
+        if _maps_cb.state == CircuitBreaker.OPEN:
+            logger.warning(f"[{ErrorCode.CIRCUIT_OPEN}] Google Maps circuit open — using fallback 30 min")
+            return 30
+
         params = {
             'origins': f"{origin}, Perth WA, Australia",
             'destinations': f"{destination}, Perth WA, Australia",
@@ -319,36 +234,35 @@ def get_travel_minutes(origin: str, destination: str, departure_dt=None) -> int:
                 params['traffic_model'] = 'best_guess'
             except Exception:
                 pass  # fall back to no traffic data
-        _record_api_call()
         try:
-            resp = requests.get(
+            resp = _maps_cb.call(
+                requests.get,
                 "https://maps.googleapis.com/maps/api/distancematrix/json",
                 params=params,
                 timeout=10
             )
+        except CircuitOpenError:
+            logger.warning(f"[{ErrorCode.CIRCUIT_OPEN}] Google Maps circuit open — using fallback 30 min")
+            return 30
         except requests.exceptions.Timeout:
-            logger.warning("Google Maps API timeout after 10s — using fallback travel time of 30 min")
-            _record_api_failure()
+            logger.warning(f"[{ErrorCode.MAPS_LOOKUP_FAILED}] Google Maps API timeout after 10s — using fallback travel time of 30 min")
             return 30
         except requests.exceptions.RequestException as e:
-            logger.warning(f"Google Maps API request error: {e} — using fallback")
-            _record_api_failure()
+            logger.warning(f"[{ErrorCode.MAPS_LOOKUP_FAILED}] Google Maps API request error: {e} — using fallback")
             return 30
         data = resp.json()
 
         if data.get('status') != 'OK':
-            logger.warning(f"Maps API status: {data.get('status')} for {origin} → {destination}")
-            _record_api_failure()
+            logger.warning(f"[{ErrorCode.MAPS_LOOKUP_FAILED}] Maps API status: {data.get('status')} for {origin} → {destination}")
+            _maps_cb.record_failure()
             return 30
 
         rows = data.get('rows', [])
         if not rows:
-            _record_api_failure()
             return 30
 
         elements = rows[0].get('elements', [])
         if not elements or elements[0].get('status') != 'OK':
-            _record_api_failure()
             return 30
 
         element = elements[0]
@@ -358,16 +272,10 @@ def get_travel_minutes(origin: str, destination: str, departure_dt=None) -> int:
         )
         travel_min = int(duration_field['value'] / 60) + TRAVEL_BUFFER_MINUTES
         logger.info(f"Travel {origin} → {destination}: {travel_min} min")
-
-        # Cache the result
-        _travel_cache[cache_key] = travel_min
-        _travel_cache_ts[cache_key] = time.time()
-        _record_api_success()
         return travel_min
 
     except Exception as e:
-        logger.error(f"Maps API error: {e}")
-        _record_api_failure()
+        logger.error(f"[{ErrorCode.MAPS_LOOKUP_FAILED}] Maps API error: {e}")
         return 30
 
 
@@ -386,22 +294,22 @@ def get_distance_matrix(addresses):
 
     # Cache key must preserve address order — the returned matrix is position-indexed.
     # sorted() was wrong: ['A','B'] and ['B','A'] would share a cache entry but need different matrices.
-    key = tuple(_normalize_address(a) for a in addresses)
+    key = tuple(addresses)
     _prune_caches()
     if key in _matrix_cache and time.time() - _matrix_cache_ts.get(key, 0) < _MATRIX_CACHE_TTL:
         logger.info(f"Distance matrix cache hit ({n} locations)")
         return _matrix_cache[key]
 
-    # Check rate limit
-    if not _check_rate_limit():
-        logger.warning("Maps API rate limit exceeded — using fallback matrix")
-        return _matrix_cache.get(key, fallback)
-
     try:
+        # Check circuit breaker before making the API call
+        if _maps_cb.state == CircuitBreaker.OPEN:
+            logger.warning(f"[{ErrorCode.CIRCUIT_OPEN}] Google Maps circuit open — using fallback matrix")
+            return fallback
+
         addrs_ctx = [f"{a}, Perth WA, Australia" for a in addresses]
-        _record_api_call()
         try:
-            resp = requests.get(
+            resp = _maps_cb.call(
+                requests.get,
                 "https://maps.googleapis.com/maps/api/distancematrix/json",
                 params={
                     'origins':      '|'.join(addrs_ctx),
@@ -412,19 +320,20 @@ def get_distance_matrix(addresses):
                 },
                 timeout=15,
             )
+        except CircuitOpenError:
+            logger.warning(f"[{ErrorCode.CIRCUIT_OPEN}] Google Maps circuit open — using fallback matrix")
+            return fallback
         except requests.exceptions.Timeout:
-            logger.warning("Google Maps API timeout after 15s — using fallback travel time of 30 min")
-            _record_api_failure()
+            logger.warning(f"[{ErrorCode.MAPS_LOOKUP_FAILED}] Google Maps API timeout after 15s — using fallback travel time of 30 min")
             return fallback
         except requests.exceptions.RequestException as e:
-            logger.warning(f"Google Maps API request error: {e} — using fallback")
-            _record_api_failure()
+            logger.warning(f"[{ErrorCode.MAPS_LOOKUP_FAILED}] Google Maps API request error: {e} — using fallback")
             return fallback
         data = resp.json()
 
         if data.get('status') != 'OK':
-            logger.warning(f"Distance matrix status: {data.get('status')}")
-            _record_api_failure()
+            logger.warning(f"[{ErrorCode.MAPS_LOOKUP_FAILED}] Distance matrix status: {data.get('status')}")
+            _maps_cb.record_failure()
             return fallback
 
         matrix = []
@@ -441,13 +350,11 @@ def get_distance_matrix(addresses):
 
         _matrix_cache[key] = matrix
         _matrix_cache_ts[key] = time.time()
-        _record_api_success()
-        logger.info(f"Distance matrix fetched: {n}x{n} locations")
+        logger.info(f"Distance matrix fetched: {n}×{n} locations")
         return matrix
 
     except Exception as e:
         logger.error(f"Distance matrix error: {e}")
-        _record_api_failure()
         return fallback
 
 
