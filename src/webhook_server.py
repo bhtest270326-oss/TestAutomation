@@ -35,10 +35,7 @@ _sse_clients_lock = threading.Lock()
 
 def broadcast_event(event_type: str, data: dict | None = None):
     payload = json.dumps(data or {})
-    message = f"event: {event_type}
-data: {payload}
-
-"
+    message = f"event: {event_type}\ndata: {payload}\n\n"
     dead = []
     with _sse_clients_lock:
         for q in _sse_clients:
