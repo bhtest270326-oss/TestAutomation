@@ -388,6 +388,20 @@ def register(bp, require_auth):
 
         return jsonify(result)
 
+    # ------------------------------------------------------------------
+    # POST /api/calendar/sync — manual Google Calendar ↔ dashboard sync
+    # ------------------------------------------------------------------
+    @bp.route('/api/calendar/sync', methods=['POST'])
+    @require_auth
+    def calendar_sync():
+        try:
+            from scheduler import sync_google_calendar
+            stats = sync_google_calendar()
+            return jsonify({'ok': True, 'data': stats})
+        except Exception:
+            logger.exception("Calendar sync failed")
+            return jsonify({'ok': False, 'error': 'Calendar sync failed'}), 500
+
 
 # ---------------------------------------------------------------------------
 from admin_pro import admin_pro_bp, require_auth  # noqa: E402

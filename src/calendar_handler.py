@@ -405,6 +405,63 @@ def delete_calendar_event(event_id):
         return False
 
 
+def list_calendar_events(time_min, time_max, max_results=500):
+    """Fetch all events from Google Calendar between time_min and time_max.
+
+    Args:
+        time_min: datetime (Perth local) — inclusive start.
+        time_max: datetime (Perth local) — exclusive end.
+        max_results: cap on returned events.
+
+    Returns a list of dicts: {id, summary, start_date, start_time, location, status}
+    or None on failure.
+    """
+    try:
+        service = get_calendar_service()
+        calendar_id = os.environ['GOOGLE_CALENDAR_ID']
+
+        try:
+            result = _calendar_cb.call(
+                service.events().list(
+                    calendarId=calendar_id,
+                    timeMin=time_min.isoformat() + '+08:00',
+                    timeMax=time_max.isoformat() + '+08:00',
+                    maxResults=max_results,
+                    singleEvents=True,
+                    orderBy='startTime',
+                ).execute
+            )
+        except CircuitOpenError:
+            logger.warning("Calendar circuit open — cannot list events")
+            return None
+
+        events = []
+        for item in result.get('items', []):
+            start = item.get('start', {})
+            dt_str = start.get('dateTime')
+            if dt_str:
+                dt = datetime.fromisoformat(dt_str)
+                start_date = dt.strftime('%Y-%m-%d')
+                start_time = dt.strftime('%H:%M')
+            else:
+                start_date = start.get('date', '')
+                start_time = '09:00'
+
+            events.append({
+                'id': item.get('id'),
+                'summary': item.get('summary', ''),
+                'start_date': start_date,
+                'start_time': start_time,
+                'location': item.get('location', ''),
+                'status': item.get('status', ''),
+            })
+        return events
+
+    except Exception as e:
+        logger.error("Error listing calendar events: %s", e, exc_info=True)
+        return None
+
+
 def confirm_tentative_event(event_id, booking_data):
     """
     Convert a tentative [PENDING] event to a confirmed event.

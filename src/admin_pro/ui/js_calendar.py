@@ -307,6 +307,27 @@ function calGoToday() {
   initCalendar();
 }
 
+async function calSyncGoogleCalendar() {
+  var btn = document.getElementById('cal-sync-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Syncing...'; }
+  try {
+    var res = await apiFetch('/api/calendar/sync', { method: 'POST' });
+    var d = (res && res.data) || {};
+    var parts = [];
+    if (d.updated) parts.push(d.updated + ' updated');
+    if (d.created) parts.push(d.created + ' created');
+    if (d.errors) parts.push(d.errors + ' errors');
+    if (parts.length === 0) parts.push('all in sync');
+    showToast('Calendar sync: ' + parts.join(', '), d.errors ? 'warning' : 'success');
+    await loadCalendarData();
+    renderCalendar();
+  } catch (err) {
+    showToast('Sync failed: ' + err.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '\u21c4 Sync'; }
+  }
+}
+
 // Aliases for backward compatibility
 function calendarNav(dir) { calNavWeek(dir); }
 function goToToday() { calGoToday(); }
@@ -489,6 +510,7 @@ function renderCalendar() {
   html += '<span class="cal-nav-label" aria-live="polite">' + headerLabel + '</span>';
   html += '<button class="cal-nav-btn" onclick="calNavWeek(1)" title="Next week" aria-label="Next week"><span aria-hidden="true">&#9654;</span></button>';
   html += '<button class="cal-nav-today-btn" onclick="calGoToday()" aria-label="Go to current week">Today</button>';
+  html += '<button class="cal-nav-today-btn" onclick="calSyncGoogleCalendar()" id="cal-sync-btn" title="Sync with Google Calendar" aria-label="Sync with Google Calendar" style="margin-left:8px">&#x21c4; Sync</button>';
   html += '<span class="cal-tz-indicator">Times shown in ' + _calGetTimezoneAbbr() + '</span>';
   html += '</div>';
 

@@ -54,6 +54,7 @@ _TASK_INTERVALS = {
     'run_daily_health_check':       300,   # every 5 min (idempotent via date key, Upgrade 10)
     'process_retry_queue':          60,    # every minute — webhook retry queue
     'verify_backup':                86400, # daily (gated to Sunday only)
+    'sync_google_calendar':         600,  # every 10 min — reconcile dashboard ↔ Google Calendar
 }
 
 _KNOWN_TASKS = frozenset(_TASK_INTERVALS.keys())
@@ -221,6 +222,13 @@ def run_scheduled_tasks():
         except Exception as e:
             logger.error("process_retry_queue error: %s", e, exc_info=True)
         _mark_ran('process_retry_queue')
+
+    if _should_run('sync_google_calendar'):
+        try:
+            sync_google_calendar()
+        except Exception as e:
+            logger.error("sync_google_calendar error: %s", e, exc_info=True)
+        _mark_ran('sync_google_calendar')
 
     if _should_run('verify_backup'):
         try:
@@ -459,6 +467,99 @@ def check_calendar_rsvps():
         elif status == 'declined':
             logger.info(f"Calendar RSVP declined for booking {booking_id} — declining")
             handle_owner_decline(booking_id, booking)
+
+def sync_google_calendar(days_ahead=21):
+    """Reconcile confirmed bookings in the local DB with Google Calendar events.
+
+    For every confirmed booking that has a calendar_event_id:
+      - Fetch the event's current date/time from Google Calendar.
+      - If it differs from the local booking, update the local booking.
+    For confirmed bookings missing a calendar_event_id:
+      - Create a Google Calendar event and link it.
+
+    Returns dict with counts of synced/created/errors.
+    """
+    import json
+    from calendar_handler import get_event_datetime, create_calendar_event
+    from state_manager import _get_conn
+
+    now = _perth_now()
+    date_from = now.strftime('%Y-%m-%d')
+    date_to = (now + timedelta(days=days_ahead)).strftime('%Y-%m-%d')
+
+    state = StateManager()
+    stats = {'checked': 0, 'updated': 0, 'created': 0, 'errors': 0}
+
+    # Fetch all confirmed bookings in the date range
+    with _get_conn() as conn:
+        rows = conn.execute("""
+            SELECT id, booking_data, calendar_event_id, preferred_date
+            FROM bookings
+            WHERE status='confirmed'
+              AND preferred_date >= ? AND preferred_date <= ?
+        """, (date_from, date_to)).fetchall()
+
+    for row in rows:
+        booking_id = row['id']
+        event_id = row['calendar_event_id']
+        try:
+            bd = json.loads(row['booking_data']) if row['booking_data'] else {}
+        except (ValueError, TypeError):
+            bd = {}
+
+        # --- Booking has no calendar event → create one ---
+        if not event_id:
+            try:
+                new_event_id = create_calendar_event(bd)
+                if new_event_id:
+                    state.update_booking_calendar_event(booking_id, new_event_id)
+                    stats['created'] += 1
+                    logger.info("Calendar sync: created missing event for booking %s", booking_id)
+            except Exception:
+                logger.exception("Calendar sync: failed to create event for booking %s", booking_id)
+                stats['errors'] += 1
+            continue
+
+        # --- Booking has a calendar event → check if dates match ---
+        stats['checked'] += 1
+        try:
+            gcal_dt = get_event_datetime(event_id)
+        except Exception:
+            logger.exception("Calendar sync: failed to fetch event %s for booking %s", event_id, booking_id)
+            stats['errors'] += 1
+            continue
+
+        if gcal_dt is None:
+            # Event may have been deleted from Google Calendar
+            logger.warning("Calendar sync: event %s not found for booking %s — may have been deleted",
+                           event_id, booking_id)
+            stats['errors'] += 1
+            continue
+
+        local_date = bd.get('preferred_date', '')
+        local_time = bd.get('preferred_time', '')
+
+        gcal_date = gcal_dt.get('date', '')
+        gcal_time = gcal_dt.get('time', '')
+
+        if local_date != gcal_date or local_time != gcal_time:
+            logger.info("Calendar sync: booking %s drifted — local=%s %s, gcal=%s %s → updating local",
+                        booking_id, local_date, local_time, gcal_date, gcal_time)
+            bd['preferred_date'] = gcal_date
+            bd['preferred_time'] = gcal_time
+            state.update_confirmed_booking_data(booking_id, bd)
+            state.log_booking_event(
+                booking_id, 'calendar_sync', actor='system',
+                details={'old_date': local_date, 'old_time': local_time,
+                         'new_date': gcal_date, 'new_time': gcal_time}
+            )
+            stats['updated'] += 1
+
+    if stats['updated'] or stats['created'] or stats['errors']:
+        logger.info("Calendar sync complete: checked=%d updated=%d created=%d errors=%d",
+                     stats['checked'], stats['updated'], stats['created'], stats['errors'])
+    return stats
+
 
 def send_morning_job_notifications():
     """At 8am Perth time, email all customers booked for today."""
