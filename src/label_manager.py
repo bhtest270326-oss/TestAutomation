@@ -1,7 +1,10 @@
 import logging
+import time
 from googleapiclient.errors import HttpError
 
 logger = logging.getLogger(__name__)
+
+CACHE_TTL_SECONDS = 300  # 5-minute TTL for label cache entries
 
 # Label definitions with Gmail colour codes
 # Gmail background/text colour pairs (from Gmail API colour palette)
@@ -32,21 +35,31 @@ LABELS = {
     },
 }
 
-_label_cache = {}
+_label_cache = {}  # Maps label_name -> (label_id, timestamp)
+
+
+def clear_label_cache():
+    """Clear the entire label cache, forcing fresh lookups on next access."""
+    _label_cache.clear()
+    logger.info("Label cache cleared")
+
 
 def get_or_create_label(service, label_name):
     """Get or create a Gmail label by name, with colour. Returns label ID or None."""
-    global _label_cache
-
     if label_name in _label_cache:
-        return _label_cache[label_name]
+        cached_id, cached_time = _label_cache[label_name]
+        if time.time() - cached_time < CACHE_TTL_SECONDS:
+            return cached_id
+        # TTL expired — discard stale entry and re-fetch
+        del _label_cache[label_name]
+        logger.debug(f"Cache TTL expired for label '{label_name}', re-fetching")
 
     try:
         result = service.users().labels().list(userId='me').execute()
         existing = {l['name']: l['id'] for l in result.get('labels', [])}
 
         if label_name in existing:
-            _label_cache[label_name] = existing[label_name]
+            _label_cache[label_name] = (existing[label_name], time.time())
             return existing[label_name]
 
         # Create with colour if defined
@@ -73,31 +86,37 @@ def get_or_create_label(service, label_name):
                     return None
             else:
                 raise
-        _label_cache[label_name] = label_id
+        _label_cache[label_name] = (label_id, time.time())
         logger.info(f"Created label: {label_name}")
         return label_id
 
     except HttpError as e:
         logger.error(f"Label create error for '{label_name}': {e}")
+        _label_cache.pop(label_name, None)
         return None
     except Exception as e:
         logger.error(f"Label error for '{label_name}': {e}")
+        _label_cache.pop(label_name, None)
         return None
 
 def apply_label(service, msg_id, label_name, remove_labels=None):
-    """Apply a label to a message, optionally removing others."""
+    """Apply a label to a message, optionally removing others.
+
+    Raises on failure so callers can handle errors appropriately.
+    On 404 from messages().modify(), retries once after clearing the stale cache entry.
+    """
+    add_id = get_or_create_label(service, label_name)
+    if not add_id:
+        return
+
+    remove_ids = []
+    if remove_labels:
+        for rl in remove_labels:
+            rid = get_or_create_label(service, rl)
+            if rid:
+                remove_ids.append(rid)
+
     try:
-        add_id = get_or_create_label(service, label_name)
-        if not add_id:
-            return
-
-        remove_ids = []
-        if remove_labels:
-            for rl in remove_labels:
-                rid = get_or_create_label(service, rl)
-                if rid:
-                    remove_ids.append(rid)
-
         service.users().messages().modify(
             userId='me',
             id=msg_id,
@@ -106,12 +125,26 @@ def apply_label(service, msg_id, label_name, remove_labels=None):
                 'removeLabelIds': remove_ids
             }
         ).execute()
-        logger.info(f"Applied label '{label_name}' to message {msg_id}")
-
     except HttpError as e:
-        logger.error(f"Apply label error: {e}")
-    except Exception as e:
-        logger.error(f"Apply label error: {e}")
+        if e.resp.status == 404:
+            # Label ID may be stale — clear cache entry and retry once
+            logger.warning(f"Got 404 applying label '{label_name}', retrying with fresh lookup")
+            _label_cache.pop(label_name, None)
+            add_id = get_or_create_label(service, label_name)
+            if not add_id:
+                raise
+            service.users().messages().modify(
+                userId='me',
+                id=msg_id,
+                body={
+                    'addLabelIds': [add_id],
+                    'removeLabelIds': remove_ids
+                }
+            ).execute()
+        else:
+            raise
+
+    logger.info(f"Applied label '{label_name}' to message {msg_id}")
 
 def initialise_labels(service):
     """Pre-create all labels on startup so they appear in Gmail sidebar."""
