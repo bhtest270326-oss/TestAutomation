@@ -500,6 +500,16 @@ HTML_SECTIONS = """
       </div>
     </div>
   </div>
+
+  <div class="ap-card" style="margin-top:20px" id="ap-calendar-waitlist">
+    <div class="ap-card-header">
+        <span class="ap-card-title">Waitlist</span>
+        <span class="ap-badge ap-badge-amber" id="cal-waitlist-count">0</span>
+    </div>
+    <div id="cal-waitlist-list" style="padding:12px">
+        <div class="ap-text-muted" style="text-align:center;font-size:13px;padding:12px 0">Loading waitlist...</div>
+    </div>
+  </div>
 </section>
 
 <!-- ═══════════════════════════════════════════════ COMMS ══ -->

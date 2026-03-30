@@ -3455,4 +3455,14 @@ body.ap-body {
   display: flex;
   gap: 8px;
 }
+
+/* --- Calendar Overlap / Conflict Indicators ------------------- */
+.cal-card-overlap {
+    border-left: 3px solid var(--ap-amber, #f59e0b) !important;
+    box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.3);
+}
+.cal-card-conflict {
+    border-left: 3px solid var(--ap-danger, #ef4444) !important;
+    box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.3);
+}
 """
