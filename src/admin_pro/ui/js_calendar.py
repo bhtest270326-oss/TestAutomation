@@ -12,6 +12,7 @@ const CAL_STATE = {
   bookings: [],              // flat array of all bookings from API
   bookingsByDate: {},        // { 'YYYY-MM-DD': [booking, ...] }
   dragData: null,
+  routeOrderByDate: {},
   userTimezone: (function() {
     try { return Intl.DateTimeFormat().resolvedOptions().timeZone; }
     catch(e) { return 'UTC'; }
@@ -70,6 +71,8 @@ async function initCalendar() {
   }
   await loadCalendarData();
   renderCalendar();
+  _calLoadWaitlist();
+  setAutoRefresh('calendar', 60000);
 }
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -146,6 +149,45 @@ async function loadCalendarData() {
 
   // Render pending panel with awaiting_owner bookings from all dates
   _calRenderPendingPanel();
+
+  // Fetch route-optimized ordering for dates with confirmed bookings (non-blocking)
+  _calFetchRouteOrders();
+}
+
+async function _calFetchRouteOrders() {
+  var datesWithConfirmed = {};
+  CAL_STATE.bookings.forEach(function(b) {
+    if (b.status === 'confirmed') {
+      var d = (b.booking_data && b.booking_data.preferred_date) || b.preferred_date;
+      if (d) datesWithConfirmed[d] = true;
+    }
+  });
+
+  var dateKeys = Object.keys(datesWithConfirmed);
+  if (!dateKeys.length) return;
+
+  var fetches = dateKeys.map(function(dateStr) {
+    return apiFetch('/v2/api/route/' + dateStr)
+      .then(function(res) { return { dateStr: dateStr, res: res }; })
+      .catch(function() { return null; });
+  });
+
+  try {
+    var results = await Promise.all(fetches);
+    var changed = false;
+    results.forEach(function(r) {
+      if (!r || !r.res || !r.res.ok || !Array.isArray(r.res.stops)) return;
+      var orderMap = {};
+      r.res.stops.forEach(function(stop, idx) {
+        if (stop.booking_id) orderMap[stop.booking_id] = idx;
+      });
+      CAL_STATE.routeOrderByDate[r.dateStr] = orderMap;
+      changed = true;
+    });
+    if (changed) renderCalendar();
+  } catch(e) {
+    // Route fetch is best-effort; ignore errors
+  }
 }
 
 // ── Pending Confirmation Panel ─────────────────────────────
@@ -308,24 +350,30 @@ function _calTimeToSlotIndex(hour, minute) {
   return (hour - CAL_HOUR_START) * 2 + Math.floor(minute / 30);
 }
 
+// ── Position helper ──────────────────────────────────────────
+function _calBookingPosition(bd) {
+  var timeStr = bd.preferred_time || '';
+  var parsed = _calParseTime(timeStr);
+  var hour = parsed ? parsed.hour : 9;
+  var minute = parsed ? parsed.minute : 0;
+  if (hour < CAL_HOUR_START) { hour = CAL_HOUR_START; minute = 0; }
+  if (hour >= CAL_HOUR_END) { hour = CAL_HOUR_END - 1; minute = 0; }
+  var slotIndex = _calTimeToSlotIndex(hour, minute);
+  var topPx = slotIndex * CAL_SLOT_HEIGHT + (minute % 30) / 30 * CAL_SLOT_HEIGHT;
+  var durationSlots = _calGetJobDurationSlots(bd);
+  var heightPx = durationSlots * CAL_SLOT_HEIGHT;
+  var maxTop = CAL_TOTAL_SLOTS * CAL_SLOT_HEIGHT - heightPx;
+  if (topPx > maxTop) topPx = maxTop;
+  return { top: topPx, bottom: topPx + heightPx, hour: hour, minute: minute, parsed: parsed, durationSlots: durationSlots, heightPx: heightPx };
+}
+
 // ── Overlap layout (Google Calendar style) ──────────────────
 function _calComputeOverlapLayout(bookings) {
   // For each booking compute start/end in pixels, then assign columns
   var items = bookings.map(function(b) {
     var bd = b.booking_data || {};
-    var timeStr = bd.preferred_time || '';
-    var parsed = _calParseTime(timeStr);
-    var hour = parsed ? parsed.hour : 9;
-    var minute = parsed ? parsed.minute : 0;
-    if (hour < CAL_HOUR_START) { hour = CAL_HOUR_START; minute = 0; }
-    if (hour >= CAL_HOUR_END) { hour = CAL_HOUR_END - 1; minute = 0; }
-    var slotIndex = _calTimeToSlotIndex(hour, minute);
-    var topPx = slotIndex * CAL_SLOT_HEIGHT + (minute % 30) / 30 * CAL_SLOT_HEIGHT;
-    var durationSlots = _calGetJobDurationSlots(bd);
-    var heightPx = durationSlots * CAL_SLOT_HEIGHT;
-    var maxTop = CAL_TOTAL_SLOTS * CAL_SLOT_HEIGHT - heightPx;
-    if (topPx > maxTop) topPx = maxTop;
-    return { booking: b, top: topPx, bottom: topPx + heightPx, col: 0, totalCols: 1 };
+    var pos = _calBookingPosition(bd);
+    return { booking: b, top: pos.top, bottom: pos.bottom, col: 0, totalCols: 1 };
   });
 
   // Sort by start time, then by duration (longer first)
@@ -370,10 +418,10 @@ function _calComputeOverlapLayout(bookings) {
     });
   }
 
-  // Return map of bookingId -> { col, totalCols }
+  // Return map of bookingId -> { col, totalCols, top, bottom }
   var layoutMap = {};
   items.forEach(function(item) {
-    layoutMap[item.booking.id] = { col: item.col, totalCols: item.totalCols };
+    layoutMap[item.booking.id] = { col: item.col, totalCols: item.totalCols, top: item.top, bottom: item.bottom };
   });
   return layoutMap;
 }
@@ -525,16 +573,25 @@ function renderCalendar() {
 
     // Booking cards with overlap layout
     var bookings = CAL_STATE.bookingsByDate[dateStr] || [];
-    bookings.sort(function(a, b) {
-      var tA = (a.booking_data && a.booking_data.preferred_time) || '';
-      var tB = (b.booking_data && b.booking_data.preferred_time) || '';
-      return tA.localeCompare(tB);
-    });
+    var routeOrder = CAL_STATE.routeOrderByDate[dateStr];
+    if (routeOrder) {
+      bookings.sort(function(a, b) {
+        var oA = (routeOrder[a.id] !== undefined) ? routeOrder[a.id] : 9999;
+        var oB = (routeOrder[b.id] !== undefined) ? routeOrder[b.id] : 9999;
+        return oA - oB;
+      });
+    } else {
+      bookings.sort(function(a, b) {
+        var tA = (a.booking_data && a.booking_data.preferred_time) || '';
+        var tB = (b.booking_data && b.booking_data.preferred_time) || '';
+        return tA.localeCompare(tB);
+      });
+    }
 
     var layoutMap = _calComputeOverlapLayout(bookings);
     bookings.forEach(function(b) {
-      var layout = layoutMap[b.id] || { col: 0, totalCols: 1 };
-      html += _calRenderBookingCard(b, dateStr, layout);
+      var layout = layoutMap[b.id] || { col: 0, totalCols: 1, top: 0, bottom: 0 };
+      html += _calRenderBookingCard(b, dateStr, layout, bookings, layoutMap);
     });
 
     html += '</div>'; // .cal-day-body
@@ -548,25 +605,13 @@ function renderCalendar() {
 }
 
 // ── Booking Card Renderer ────────────────────────────────────
-function _calRenderBookingCard(b, dateStr, layout) {
-  layout = layout || { col: 0, totalCols: 1 };
+function _calRenderBookingCard(b, dateStr, layout, allBookings, layoutMap) {
+  layout = layout || { col: 0, totalCols: 1, top: 0, bottom: 0 };
   var bd = b.booking_data || {};
-  var timeStr = bd.preferred_time || '';
-  var parsed = _calParseTime(timeStr);
+  var pos = _calBookingPosition(bd);
 
-  var hour = parsed ? parsed.hour : 9;
-  var minute = parsed ? parsed.minute : 0;
-
-  if (hour < CAL_HOUR_START) { hour = CAL_HOUR_START; minute = 0; }
-  if (hour >= CAL_HOUR_END) { hour = CAL_HOUR_END - 1; minute = 0; }
-
-  var slotIndex = _calTimeToSlotIndex(hour, minute);
-  var topPx = slotIndex * CAL_SLOT_HEIGHT + (minute % 30) / 30 * CAL_SLOT_HEIGHT;
-  var durationSlots = _calGetJobDurationSlots(bd);
-  var heightPx = durationSlots * CAL_SLOT_HEIGHT;
-
-  var maxTop = CAL_TOTAL_SLOTS * CAL_SLOT_HEIGHT - heightPx;
-  if (topPx > maxTop) topPx = maxTop;
+  var topPx = pos.top;
+  var heightPx = pos.heightPx;
 
   // Overlap column positioning
   var colWidth = 100 / layout.totalCols;
@@ -576,14 +621,37 @@ function _calRenderBookingCard(b, dateStr, layout) {
   var isPending = b.status === 'awaiting_owner';
   var colorClass = isConfirmed ? 'cal-card-confirmed' : 'cal-card-pending';
 
+  // Overlap and conflict highlighting
+  var overlapClass = '';
+  var hasConflictWithConfirmed = false;
+  if (layout.totalCols > 1) {
+    if (isPending && allBookings && layoutMap) {
+      // Check if this pending booking overlaps with any confirmed booking using pre-computed positions
+      for (var oi = 0; oi < allBookings.length; oi++) {
+        var other = allBookings[oi];
+        if (other.id === b.id || other.status !== 'confirmed') continue;
+        var oLayout = layoutMap[other.id];
+        if (!oLayout) continue;
+        if (layout.top < oLayout.bottom && layout.bottom > oLayout.top) {
+          hasConflictWithConfirmed = true;
+          break;
+        }
+      }
+      overlapClass = hasConflictWithConfirmed ? ' cal-card-conflict' : ' cal-card-overlap';
+    } else {
+      overlapClass = ' cal-card-overlap';
+    }
+  }
+
+  var timeStr = bd.preferred_time || '';
   var name = escapeHtml(bd.customer_name || bd.name || 'Unknown');
   var service = serviceLabel(bd.service_type);
-  var displayTime = parsed ? _calFormatTime12(hour, minute) : (timeStr || 'TBD');
+  var displayTime = pos.parsed ? _calFormatTime12(pos.hour, pos.minute) : (timeStr || 'TBD');
   var isChanged = CAL_STATE.changedBookings.has(b.id);
   var badge = statusBadge(b.status);
 
   var html = '';
-  html += '<div class="cal-booking-card ' + colorClass + (isChanged ? ' cal-card-changed' : '') + '" ';
+  html += '<div class="cal-booking-card ' + colorClass + overlapClass + (isChanged ? ' cal-card-changed' : '') + '" ';
   html += 'style="top:' + topPx + 'px;height:' + heightPx + 'px;left:calc(' + leftPct + '% + 1px);width:calc(' + colWidth + '% - 2px)" ';
   html += 'draggable="true" tabindex="0" ';
   html += 'role="button" aria-label="' + name + ' at ' + displayTime + ', ' + service + '" ';
@@ -599,6 +667,10 @@ function _calRenderBookingCard(b, dateStr, layout) {
   html += '<div class="cal-card-time">' + displayTime + ' ' + badge + '</div>';
   html += '<div class="cal-card-name">' + name + '</div>';
   html += '<div class="cal-card-info">' + service + rimsStr + '</div>';
+
+  if (hasConflictWithConfirmed) {
+    html += '<div style="font-size:10px;color:var(--ap-danger,#ef4444);margin-top:2px">\\u26a0 Conflicts with confirmed job</div>';
+  }
 
   // Inline confirm/decline for pending bookings
   if (isPending) {
@@ -1434,5 +1506,60 @@ function _calGetStyles() {
     '.cal-nav-label { font-size: 12px; }' +
   '}' +
   '';
+}
+
+// ── Waitlist Panel ──────────────────────────────────────────
+async function _calLoadWaitlist() {
+  var container = document.getElementById('cal-waitlist-list');
+  var countBadge = document.getElementById('cal-waitlist-count');
+  if (!container) return;
+
+  try {
+    var res = await apiFetch('/v2/api/waitlist');
+    var entries = (res && res.data) || [];
+
+    if (countBadge) countBadge.textContent = entries.length;
+
+    if (!entries.length) {
+      container.innerHTML = '<div class="ap-text-muted" style="text-align:center;font-size:13px;padding:12px 0">No waitlisted bookings</div>';
+      return;
+    }
+
+    var html = '';
+    entries.forEach(function(entry) {
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid var(--ap-border,#e2e8f0)">';
+      html += '<div>';
+      html += '<div style="font-weight:600;font-size:14px;color:var(--ap-text,#1e293b)">' + escapeHtml(entry.customer_name || 'Unknown') + '</div>';
+      html += '<div style="font-size:12px;color:var(--ap-text-muted,#64748b)">' + escapeHtml(entry.service_type || '') + '</div>';
+      if (entry.preferred_dates) {
+        var dates = entry.preferred_dates;
+        try { dates = JSON.parse(dates); } catch(_) {}
+        if (Array.isArray(dates)) dates = dates.join(', ');
+        html += '<div style="font-size:11px;color:var(--ap-text-muted,#94a3b8)">Preferred: ' + escapeHtml(String(dates)) + '</div>';
+      }
+      html += '</div>';
+      html += '<div style="display:flex;gap:6px;align-items:center">';
+      html += '<span class="ap-badge ap-badge-amber">' + escapeHtml(entry.status || 'waiting') + '</span>';
+      if (entry.id) {
+        html += '<button class="ap-btn ap-btn-ghost ap-btn-xs" onclick="offerWaitlistSlot(\\'' + entry.id + '\\')">Offer Slot</button>';
+      }
+      html += '</div>';
+      html += '</div>';
+    });
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = '<div class="ap-text-muted" style="text-align:center;font-size:13px;padding:12px 0;color:var(--ap-danger,#ef4444)">Failed to load waitlist</div>';
+  }
+}
+
+async function offerWaitlistSlot(entryId) {
+  if (!confirm('Offer an available slot to this customer?')) return;
+  try {
+    await apiFetch('/v2/api/waitlist/' + entryId + '/offer', { method: 'POST' });
+    showToast('Slot offered to customer.', 'success');
+    _calLoadWaitlist();
+  } catch (err) {
+    showToast('Failed: ' + err.message, 'error');
+  }
 }
 """
