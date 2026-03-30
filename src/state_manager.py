@@ -389,8 +389,8 @@ def _ensure_schema(conn):
             created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
         );
-        CREATE INDEX IF NOT EXISTS idx_waitlist_status ON waitlist(status);
-        CREATE INDEX IF NOT EXISTS idx_waitlist_dates  ON waitlist(preferred_dates);
+        -- idx_waitlist_status and idx_waitlist_dates created in migrations
+        -- (old waitlist table may lack these columns until ALTER TABLE runs)
 
         CREATE TABLE IF NOT EXISTS message_queue (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -470,6 +470,8 @@ def _ensure_schema(conn):
         "ALTER TABLE waitlist ADD COLUMN offered_booking_id TEXT",
         "ALTER TABLE waitlist ADD COLUMN offer_expires_at TEXT",
         "ALTER TABLE waitlist ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP",
+        "CREATE INDEX IF NOT EXISTS idx_waitlist_status ON waitlist(status)",
+        "CREATE INDEX IF NOT EXISTS idx_waitlist_dates ON waitlist(preferred_dates)",
     ]
     for sql in _migrations:
         try:
