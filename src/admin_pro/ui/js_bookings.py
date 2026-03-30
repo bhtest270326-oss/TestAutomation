@@ -570,7 +570,10 @@ async function openBookingDetail(bookingId) {
           quoteBtn,
           notifyBtn,
         ].join(\'\')
-      : \'<button class="ap-btn ap-btn-ghost" onclick="openEditModal(\\'\' + bookingId + \'\\')">&#9998; Edit</button>\' + quoteBtn + notifyBtn;
+      : (booking.status === \'confirmed\')
+        ? \'<button class="ap-btn ap-btn-danger" onclick="cancelBookingFromModal(\\'\' + bookingId + \'\\')">&#10007; Cancel</button>\' +
+          \'<button class="ap-btn ap-btn-ghost" onclick="openEditModal(\\'\' + bookingId + \'\\')">&#9998; Edit</button>\' + quoteBtn + notifyBtn
+        : \'<button class="ap-btn ap-btn-ghost" onclick="openEditModal(\\'\' + bookingId + \'\\')">&#9998; Edit</button>\' + quoteBtn + notifyBtn;
 
     const shortId = bookingId.substring(0, 8).toUpperCase();
     showModal(
@@ -595,6 +598,19 @@ async function confirmBooking(bookingId) {
     loadBookings();
   } catch (err) {
     showToast(\'Could not confirm: \' + err.message, \'error\');
+  }
+}
+
+async function cancelBookingFromModal(bookingId) {
+  if (!confirm(\'Cancel this confirmed booking? The customer will need to be notified separately.\')) return;
+  try {
+    await apiFetch(\'/api/bookings/\' + bookingId + \'/cancel\', { method: \'POST\' });
+    closeModal();
+    showToast(\'Booking cancelled.\', \'info\');
+    loadBookings();
+    if (typeof initCalendar === \'function\') initCalendar();
+  } catch (err) {
+    showToast(\'Failed to cancel: \' + err.message, \'error\');
   }
 }
 
