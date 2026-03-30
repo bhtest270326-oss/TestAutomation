@@ -287,7 +287,7 @@ def create_app():
             except Exception as e:
                 # Fix 6 — log instead of silently swallowing
                 logger.warning("Failed to update last_gmail_poll_at: %s", e)
-            broadcast_event('new_booking', {'source': 'email', 'history_id': str(history_id)})
+            broadcast_event('booking_update', {'source': 'email', 'history_id': str(history_id)})
         except Exception as e:
             logger.error("Gmail webhook processing error: %s", e, exc_info=True)
             # Enqueue for retry instead of silently dropping

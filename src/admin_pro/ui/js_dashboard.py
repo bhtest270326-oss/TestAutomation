@@ -448,6 +448,16 @@ var _sseReconnectDelay = 1000;   // starts at 1s, exponential backoff
 var _sseMaxDelay = 30000;        // cap at 30s
 var _sseReconnectTimer = null;
 
+var _dashRefreshTimer = null;
+function _debouncedDashRefresh() {
+  if (_dashRefreshTimer) clearTimeout(_dashRefreshTimer);
+  _dashRefreshTimer = setTimeout(function() {
+    _dashRefreshTimer = null;
+    initDashboard();
+    if (typeof loadActivity === 'function') loadActivity();
+  }, 2000);
+}
+
 function initSSE() {
   if (_sseSource) {
     _sseSource.close();
@@ -492,16 +502,13 @@ function _connectSSE() {
 
   _sseSource.addEventListener('booking_update', function(e) {
     console.log('SSE: booking_update', e.data);
-    initDashboard();
-    // Notify the activity feed if visible
-    if (typeof loadActivity === 'function') loadActivity();
+    _debouncedDashRefresh();
   });
 
   _sseSource.addEventListener('new_booking', function(e) {
     console.log('SSE: new_booking', e.data);
     showToast('New booking received!', 'info');
-    initDashboard();
-    if (typeof loadActivity === 'function') loadActivity();
+    _debouncedDashRefresh();
   });
 
   _sseSource.addEventListener('status_change', function(e) {
@@ -510,8 +517,7 @@ function _connectSSE() {
     try { data = JSON.parse(e.data); } catch (_) {}
     var action = data.action || 'updated';
     showToast('Booking ' + action, action === 'confirmed' ? 'success' : 'info');
-    initDashboard();
-    if (typeof loadActivity === 'function') loadActivity();
+    _debouncedDashRefresh();
   });
 
   _sseSource.addEventListener('notification', function(e) {
@@ -526,6 +532,7 @@ function _connectSSE() {
     _setSseStatus(false);
     _sseSource.close();
     _sseSource = null;
+    if (window._apAuthExpired) return;  // Don't reconnect if auth failed
 
     // Re-enable polling as fallback
     setAutoRefresh('dashboard', 30000);
