@@ -334,11 +334,14 @@ def _process_single_message_inner(service, state, msg_id):
         except Exception as e:
             logger.error(f"Availability inquiry check failed for {customer_email}: {e}")
         email_images = _extract_image_attachments(payload)
-        handle_new_enquiry(
-            service, state, msg_id, thread_id,
-            body, subject, customer_email, message_id_header,
-            images=email_images if email_images else None,
-        )
+        try:
+            handle_new_enquiry(
+                service, state, msg_id, thread_id,
+                body, subject, customer_email, message_id_header,
+                images=email_images if email_images else None,
+            )
+        except Exception as e:
+            logger.error(f"handle_new_enquiry failed for {msg_id} from {customer_email}: {e}", exc_info=True)
 
     state.mark_email_processed(msg_id)
 
@@ -1034,37 +1037,9 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
         logger.error(f"Service area check error: {e}")
 
     if needs_clarification:
-        # Create booking immediately so all communications are logged from the start
-        booking_data['missing_fields'] = missing_fields
-        early_id = state.create_pending_booking(
-            booking_data=booking_data,
-            source='email',
-            customer_email=customer_email,
-            raw_message=body,
-            msg_id=msg_id,
-            thread_id=thread_id
-        )
-        try:
-            state.log_booking_event(early_id, 'email_received', actor='customer',
-                details={'from': customer_email, 'subject': subject, 'snippet': body[:500]})
-            state.log_booking_event(early_id, 'created', actor='ai',
-                details={'confidence': confidence, 'customer_email': customer_email,
-                         'needs_clarification': True, 'missing_fields': missing_fields})
-        except Exception as e:
-            logger.error(f"Could not log early booking events: {e}")
-
-        if get_flag('flag_auto_email_replies'):
-            send_clarification_email(service, customer_email, subject, missing_fields,
-                                      thread_id=thread_id, message_id_header=message_id_header,
-                                      booking_data=booking_data)
-            try:
-                state.log_booking_event(early_id, 'email_sent', actor='ai',
-                    details={'to': customer_email, 'type': 'clarification',
-                             'missing_fields': missing_fields})
-            except Exception:
-                pass
-        else:
-            logger.info(f"Auto email replies disabled — clarification not sent to {customer_email}")
+        # Create clarification record FIRST so retries route correctly
+        # (if email send fails, the retry will find this record and re-enter
+        # handle_clarification_reply instead of hitting _handle_active_booking_reply)
         state.create_pending_clarification(
             booking_data=booking_data,
             customer_email=customer_email,
@@ -1072,11 +1047,53 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
             msg_id=msg_id,
             missing_fields=missing_fields
         )
+
+        # Create booking for communication logging
+        booking_data['missing_fields'] = missing_fields
+        early_id = None
+        try:
+            early_id = state.create_pending_booking(
+                booking_data=booking_data,
+                source='email',
+                customer_email=customer_email,
+                raw_message=body,
+                msg_id=msg_id,
+                thread_id=thread_id
+            )
+        except Exception as e:
+            logger.error(f"Could not create early booking for comm logging: {e}")
+
+        if early_id:
+            try:
+                state.log_booking_event(early_id, 'email_received', actor='customer',
+                    details={'from': customer_email, 'subject': subject, 'snippet': body[:500]})
+                state.log_booking_event(early_id, 'created', actor='ai',
+                    details={'confidence': confidence, 'customer_email': customer_email,
+                             'needs_clarification': True, 'missing_fields': missing_fields})
+            except Exception as e:
+                logger.error(f"Could not log early booking events: {e}")
+
+        if get_flag('flag_auto_email_replies'):
+            try:
+                send_clarification_email(service, customer_email, subject, missing_fields,
+                                          thread_id=thread_id, message_id_header=message_id_header,
+                                          booking_data=booking_data)
+                if early_id:
+                    try:
+                        state.log_booking_event(early_id, 'email_sent', actor='ai',
+                            details={'to': customer_email, 'type': 'clarification',
+                                     'missing_fields': missing_fields})
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.error(f"Failed to send clarification email to {customer_email}: {e}")
+        else:
+            logger.info(f"Auto email replies disabled — clarification not sent to {customer_email}")
         try:
             label_pending_reply(service, msg_id)
         except Exception as e:
             logger.warning("Could not apply pending-reply label for %s: %s", msg_id, e)
-        logger.info(f"Clarification sent to {customer_email}, thread {thread_id} (booking {early_id})")
+        logger.info(f"Clarification sent to {customer_email}, thread {thread_id}")
     else:
         # --- Duplicate / Repeat Customer Detection ---
         try:
@@ -1193,7 +1210,10 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
         except Exception as e:
             logger.error(f"Could not log booking creation event: {e}")
 
-        send_owner_confirmation_request(pending_id, booking_data)
+        try:
+            send_owner_confirmation_request(pending_id, booking_data)
+        except Exception as e:
+            logger.error(f"Failed to send owner confirmation for {pending_id}: {e}")
         try:
             state.log_booking_event(pending_id, 'sms_sent', actor='system',
                 details={'to': 'owner', 'type': 'confirmation_request'})
