@@ -26,6 +26,8 @@ def _build_html():
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Wheel Doctor — Control Pro</title>
+<link rel="icon" type="image/jpeg" href="/static/Banner.jpg">
+<link rel="apple-touch-icon" href="/static/Banner.jpg">
 <link rel="manifest" href="/static/manifest.json">
 <meta name="theme-color" content="#C41230">
 <meta name="apple-mobile-web-app-capable" content="yes">
