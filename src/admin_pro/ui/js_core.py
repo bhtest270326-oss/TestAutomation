@@ -97,6 +97,10 @@ function showSection(name) {
     }
   });
 
+  // Close any open modals when switching sections
+  closeModal();
+  if (typeof closeRouteMap === 'function') closeRouteMap();
+
   // Update state
   APP.currentSection = name;
 
