@@ -76,10 +76,14 @@ def _background_loop():
         try:
             now = time.time()
 
-            # Renew Gmail watch every 6 days
+            # Renew Gmail watch every 6 days (only update timer on success)
             if PUBSUB_ENABLED and (now - last_watch_renewal > _WATCH_RENEWAL_INTERVAL):
-                register_gmail_watch()
-                last_watch_renewal = now
+                result = register_gmail_watch()
+                if result is not None:
+                    last_watch_renewal = now
+                else:
+                    # Retry in 10 minutes instead of immediately every 30s
+                    last_watch_renewal = now - _WATCH_RENEWAL_INTERVAL + 600
 
             # Legacy polling fallback
             if not PUBSUB_ENABLED:

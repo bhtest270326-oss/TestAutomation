@@ -474,6 +474,10 @@ def register_gmail_watch():
 
         global _watch_failure_alerted
         _watch_failure_alerted = False
+        try:
+            state.set_app_state('gmail_watch_failure_alerted_at', '')
+        except Exception:
+            pass
 
         logger.info(f"Gmail watch registered — historyId {history_id}, expires {expiry_dt}")
         return result
@@ -483,13 +487,31 @@ def register_gmail_watch():
         return None
 
 
-_watch_failure_alerted = False  # deduplicate within a single process lifetime
+_watch_failure_alerted = False  # in-memory dedup within a single process lifetime
 
 def _alert_owner_watch_failure(detail: str) -> None:
-    """SMS + email alert to owner when Gmail watch renewal fails (Fix M5)."""
+    """SMS + email alert to owner when Gmail watch renewal fails (Fix M5).
+
+    Uses DB-backed dedup so restarts don't re-spam the owner.
+    Only sends one alert per 6-hour window.
+    """
     global _watch_failure_alerted
     if _watch_failure_alerted:
         return
+    # DB-backed dedup: don't alert again within 6 hours across restarts
+    try:
+        from state_manager import StateManager
+        from datetime import datetime, timezone, timedelta
+        state = StateManager()
+        last_alert = state.get_app_state('gmail_watch_failure_alerted_at')
+        if last_alert:
+            last_dt = datetime.fromisoformat(last_alert)
+            if datetime.now(timezone.utc) - last_dt < timedelta(hours=6):
+                _watch_failure_alerted = True
+                return
+        state.set_app_state('gmail_watch_failure_alerted_at', datetime.now(timezone.utc).isoformat())
+    except Exception:
+        pass
     _watch_failure_alerted = True
     try:
         owner_phone = os.environ.get('OWNER_PHONE', '') or os.environ.get('OWNER_MOBILE', '')
