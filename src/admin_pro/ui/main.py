@@ -16,6 +16,7 @@ def _build_html():
     from .js_activity import JS_ACTIVITY
     from .js_customers import JS_CUSTOMERS
     from .js_route import JS_ROUTE
+    from .js_competitors import JS_COMPETITORS
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -62,6 +63,7 @@ if ('serviceWorker' in navigator) {{
 {JS_ACTIVITY}
 {JS_CUSTOMERS}
 {JS_ROUTE}
+{JS_COMPETITORS}
 </script>
 </body>
 </html>"""
