@@ -107,7 +107,7 @@ def apply_label(service, msg_id, label_name, remove_labels=None):
     """
     add_id = get_or_create_label(service, label_name)
     if not add_id:
-        return
+        raise RuntimeError(f"Could not get or create label '{label_name}'")
 
     remove_ids = []
     if remove_labels:

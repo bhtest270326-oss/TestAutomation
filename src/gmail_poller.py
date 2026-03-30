@@ -1232,6 +1232,21 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
         except Exception as e:
             logger.error(f"Could not log booking creation event: {e}")
 
+        # Send acknowledgment email to the customer so they know we received their request
+        if get_flag('flag_auto_email_replies'):
+            try:
+                _send_booking_acknowledgment(service, customer_email, subject, booking_data,
+                                              thread_id=thread_id, message_id_header=message_id_header)
+                logger.info(f"Booking acknowledgment sent to {customer_email}")
+                try:
+                    state.log_booking_event(pending_id, 'email_sent', actor='ai',
+                        details={'to': customer_email, 'type': 'acknowledgment'})
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.error(f"Failed to send acknowledgment email to {customer_email}: {e}")
+                # Don't block the flow — the owner SMS and label are more critical
+
         send_owner_confirmation_request(pending_id, booking_data)
         try:
             state.log_booking_event(pending_id, 'sms_sent', actor='system',
@@ -1620,6 +1635,68 @@ def send_clarification_email(service, to_email, original_subject, missing_fields
         + _p('To complete your booking we just need:')
         + _ul(missing_fields)
         + _p('Once we have this, we\'ll get your booking confirmed right away.')
+        + f'<p style="margin:24px 0 0;color:{DARK};font-size:15px;">'
+          f'Kind regards,<br><strong style="color:#C41230;">Wheel Doctor Team</strong></p>'
+    )
+
+    send_customer_email(service, to_email, subject, content,
+                        thread_id=thread_id, message_id_header=message_id_header)
+
+
+def _send_booking_acknowledgment(service, to_email, original_subject, booking_data,
+                                  thread_id=None, message_id_header=None):
+    """Send an immediate acknowledgment email when a complete booking is received.
+
+    Tells the customer we've received their request and will confirm shortly.
+    """
+    from email_utils import send_customer_email, _p, _info_table, DARK
+
+    name = 'there'
+    try:
+        if booking_data and booking_data.get('customer_name'):
+            name = booking_data['customer_name'].split()[0]
+    except Exception:
+        pass
+
+    # Build a summary of the extracted details
+    details = []
+    try:
+        if booking_data.get('vehicle_make'):
+            vehicle_str = ' '.join(filter(None, [
+                booking_data.get('vehicle_year', ''),
+                booking_data.get('vehicle_make', ''),
+                booking_data.get('vehicle_model', ''),
+            ])).strip()
+            if vehicle_str:
+                details.append(('Vehicle', vehicle_str))
+        location = booking_data.get('address') or booking_data.get('suburb')
+        if location:
+            details.append(('Location', location))
+        if booking_data.get('preferred_date'):
+            from datetime import datetime as _dt
+            try:
+                dt = _dt.strptime(booking_data['preferred_date'], '%Y-%m-%d')
+                formatted_date = dt.strftime('%A, %d %B %Y').replace(' 0', ' ')
+                details.append(('Preferred date', formatted_date))
+            except (ValueError, TypeError):
+                details.append(('Preferred date', booking_data['preferred_date']))
+        if booking_data.get('preferred_time'):
+            details.append(('Estimated time', booking_data['preferred_time']))
+    except Exception:
+        pass
+
+    details_block = _info_table(details) if details else ''
+
+    subject = original_subject if original_subject.startswith('Re:') else f'Re: {original_subject}'
+
+    content = (
+        _p(f'Hi {name},')
+        + _p('Thank you for getting in touch with Perth Swedish &amp; European Auto Centre!')
+        + _p('We\'ve received your booking request and are reviewing the details now. '
+             'You\'ll receive a confirmation shortly.')
+        + (('<p style="color:#1e293b;font-size:15px;line-height:1.65;margin:16px 0 10px;">'
+            'Here\'s what we have:</p>' + details_block) if details_block else '')
+        + _p('If any of the above details aren\'t quite right, just reply to this email and let us know.')
         + f'<p style="margin:24px 0 0;color:{DARK};font-size:15px;">'
           f'Kind regards,<br><strong style="color:#C41230;">Wheel Doctor Team</strong></p>'
     )
