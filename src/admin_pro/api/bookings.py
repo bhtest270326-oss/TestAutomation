@@ -483,6 +483,54 @@ def register(bp, require_auth):
             return jsonify({'ok': False, 'error': 'Internal server error'}), 500
 
     # ------------------------------------------------------------------
+    # POST /api/bookings/<booking_id>/cancel
+    # ------------------------------------------------------------------
+    @bp.route('/api/bookings/<booking_id>/cancel', methods=['POST'])
+    @require_auth
+    def cancel_booking(booking_id):
+        try:
+            body = request.get_json(silent=True) or {}
+            reason = body.get('reason', '')
+
+            state = StateManager()
+
+            with _get_conn() as conn:
+                row = conn.execute(
+                    "SELECT status, calendar_event_id FROM bookings WHERE id=?", (booking_id,)
+                ).fetchone()
+
+            if not row:
+                return jsonify({'ok': False, 'error': 'Booking not found'}), 404
+
+            if row['status'] != 'confirmed':
+                return jsonify({
+                    'ok': False,
+                    'error': f"Booking is in '{row['status']}' state, not confirmed"
+                }), 409
+
+            # ── Delete calendar event before cancelling ──
+            if row['calendar_event_id']:
+                try:
+                    from calendar_handler import delete_calendar_event
+                    delete_calendar_event(row['calendar_event_id'])
+                    logger.info("Cancel: deleted calendar event %s for booking %s", row['calendar_event_id'], booking_id)
+                except Exception:
+                    logger.exception("Cancel: calendar event delete failed for booking %s (non-blocking)", booking_id)
+
+            success = state.cancel_booking(booking_id, reason)
+            if not success:
+                return jsonify({'ok': False, 'error': 'Could not cancel booking'}), 409
+
+            from webhook_server import broadcast_event
+            broadcast_event('status_change', {'booking_id': booking_id, 'action': 'cancelled'})
+
+            return jsonify({'ok': True})
+
+        except Exception:
+            logger.exception("cancel_booking failed for %s", booking_id)
+            return jsonify({'ok': False, 'error': 'Internal server error'}), 500
+
+    # ------------------------------------------------------------------
     # POST /api/bookings/<booking_id>/edit
     # ------------------------------------------------------------------
     @bp.route('/api/bookings/<booking_id>/edit', methods=['POST'])

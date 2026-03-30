@@ -799,6 +799,19 @@ class StateManager:
         self.log_booking_event(pending_id, 'declined', actor='system')
         return True
 
+    def cancel_booking(self, booking_id, reason=''):
+        with self._conn() as conn:
+            result = conn.execute("""
+                UPDATE bookings SET status='cancelled', declined_at=?
+                WHERE id=? AND status='confirmed'
+            """, (datetime.now(timezone.utc).isoformat(), booking_id))
+            if result.rowcount == 0:
+                logger.warning(f"cancel_booking: {booking_id} not in confirmed state")
+                return False
+        self.log_booking_event(booking_id, 'cancelled', actor='owner', details={'reason': reason})
+        logger.info(f"Cancelled booking {booking_id}")
+        return True
+
     def update_confirmed_booking_data(self, booking_id, booking_data):
         """Update booking_data (e.g. preferred_time) on a confirmed booking."""
         with self._conn() as conn:
