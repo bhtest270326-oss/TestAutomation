@@ -42,9 +42,7 @@ async function openRouteMap(dateStr) {
     _createRouteModal();
     modal = document.getElementById('route-map-modal');
   }
-  modal.style.display = 'flex';
   modal.classList.add('open');
-  document.body.style.overflow = 'hidden';
 
   // Show loading state
   var content = document.getElementById('route-map-content');
@@ -72,14 +70,6 @@ function _createRouteModal() {
   var modal = document.createElement('div');
   modal.id = 'route-map-modal';
   modal.className = 'ap-modal-overlay';
-  modal.style.display = 'none';
-  modal.style.position = 'fixed';
-  modal.style.inset = '0';
-  modal.style.zIndex = '9999';
-  modal.style.background = 'rgba(0,0,0,0.5)';
-  modal.style.display = 'none';
-  modal.style.alignItems = 'center';
-  modal.style.justifyContent = 'center';
   modal.onclick = function(e) {
     if (e.target === modal) closeRouteMap();
   };
@@ -114,8 +104,6 @@ function closeRouteMap() {
   var modal = document.getElementById('route-map-modal');
   if (modal) {
     modal.classList.remove('open');
-    modal.style.display = 'none';
-    document.body.style.overflow = '';
   }
   // Clean up Google Maps objects
   ROUTE_STATE.markers = [];
