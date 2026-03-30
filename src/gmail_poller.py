@@ -530,6 +530,34 @@ def recover_stale_emails():
         logger.error(f"Stale email recovery failed: {e}", exc_info=True)
 
 
+def retry_failed_emails():
+    """Retry emails that failed mid-pipeline (e.g. Gmail 429 rate limit).
+
+    Called periodically from the background loop. Finds messages that have
+    processing attempts recorded but are NOT marked processed — these are
+    messages that errored after partial processing and need another try.
+    """
+    try:
+        state = StateManager()
+        failed = state.get_failed_unprocessed_messages()
+        if not failed:
+            return
+
+        service = get_gmail_service()
+        retried = 0
+        for row in failed:
+            msg_id = row['msg_id']
+            attempts = row['attempts']
+            logger.info(f"Retrying failed email {msg_id} (attempt {attempts + 1})")
+            _process_single_message(service, state, msg_id)
+            retried += 1
+
+        if retried:
+            logger.info(f"Retried {retried} previously-failed email(s)")
+    except Exception as e:
+        logger.error(f"retry_failed_emails error: {e}", exc_info=True)
+
+
 def poll_gmail():
     """Fallback full-inbox scan used when Pub/Sub webhooks are not configured."""
     try:
@@ -1200,19 +1228,25 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
             logger.warning("Image analysis failed (non-fatal): %s", e)
 
     # Create early booking for communication logging (not sent to owner yet)
+    # On retry, reuse existing booking instead of creating a duplicate
     booking_data['missing_fields'] = missing_fields if needs_clarification else []
     early_id = None
-    try:
-        early_id = state.create_pending_booking(
-            booking_data=booking_data,
-            source='email',
-            customer_email=customer_email,
-            raw_message=body,
-            msg_id=msg_id,
-            thread_id=thread_id
-        )
-    except Exception as e:
-        logger.error(f"Could not create early booking for comm logging: {e}")
+    existing_booking = state.get_booking_by_thread(thread_id) if thread_id else None
+    if existing_booking:
+        early_id = existing_booking['id']
+        logger.info(f"Reusing existing booking {early_id} for retry of {msg_id}")
+    else:
+        try:
+            early_id = state.create_pending_booking(
+                booking_data=booking_data,
+                source='email',
+                customer_email=customer_email,
+                raw_message=body,
+                msg_id=msg_id,
+                thread_id=thread_id
+            )
+        except Exception as e:
+            logger.error(f"Could not create early booking for comm logging: {e}")
 
     if early_id:
         try:
@@ -1782,13 +1816,16 @@ def _send_availability_confirmation(service, state, msg_id, thread_id, subject, 
             pass
 
     # Create pending clarification BEFORE sending (retry safety)
-    state.create_pending_clarification(
-        booking_data=booking_data,
-        customer_email=customer_email,
-        thread_id=thread_id,
-        msg_id=msg_id,
-        missing_fields=clarification_fields,
-    )
+    # On retry, skip if clarification already exists for this thread
+    existing_clar = state.get_pending_booking_by_thread(thread_id) if thread_id else None
+    if not existing_clar:
+        state.create_pending_clarification(
+            booking_data=booking_data,
+            customer_email=customer_email,
+            thread_id=thread_id,
+            msg_id=msg_id,
+            missing_fields=clarification_fields,
+        )
 
     # Format availability email — include any fields still needed from the customer
     from email_utils import send_customer_email as _send_email

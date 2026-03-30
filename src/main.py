@@ -5,7 +5,7 @@ import threading
 import logging
 from pythonjsonlogger import jsonlogger
 from webhook_server import create_app
-from gmail_poller import poll_gmail, register_gmail_watch, recover_stale_emails
+from gmail_poller import poll_gmail, register_gmail_watch, recover_stale_emails, retry_failed_emails
 from twilio_handler import poll_sms_replies
 from scheduler import run_scheduled_tasks
 
@@ -91,6 +91,13 @@ def _background_loop():
                 else:
                     # Retry in 10 minutes instead of immediately every 30s
                     last_watch_renewal = now - _WATCH_RENEWAL_INTERVAL + 600
+
+            # Retry emails that failed mid-pipeline (e.g. Gmail 429 rate limit)
+            # Runs every loop iteration (~30s) in both Pub/Sub and polling modes
+            try:
+                retry_failed_emails()
+            except Exception as e:
+                logger.error(f"retry_failed_emails error: {e}", exc_info=True)
 
             # Legacy polling fallback
             if not PUBSUB_ENABLED:

@@ -615,9 +615,12 @@ def get_week_availability(duration_minutes: int, from_date_str: str = None,
         try:
             start = datetime.strptime(from_date_str, '%Y-%m-%d')
         except ValueError:
-            start = _perth_now_local().replace(hour=0, minute=0, second=0, microsecond=0)
+            start = _perth_now_local().replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
     else:
-        start = _perth_now_local().replace(hour=0, minute=0, second=0, microsecond=0)
+        # Strip tzinfo so all datetime comparisons within this function are
+        # naive (Perth local) — avoids "can't compare offset-naive and
+        # offset-aware datetimes" when comparing with job_start from strptime.
+        start = _perth_now_local().replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
 
     # Collect next N business days (Mon–Fri, excluding WA public holidays)
     business_days = []

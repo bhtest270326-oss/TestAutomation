@@ -1011,6 +1011,21 @@ class StateManager:
             """, (msg_id, error_msg, datetime.now(timezone.utc).isoformat()))
         return self.get_processing_attempts(msg_id)
 
+    def get_failed_unprocessed_messages(self):
+        """Return msg_ids that have failed processing attempts but are NOT marked processed.
+
+        These are messages that errored mid-pipeline and need retrying.
+        """
+        with self._conn() as conn:
+            rows = conn.execute("""
+                SELECT epa.msg_id, epa.attempts, epa.last_error, epa.last_attempt_at
+                FROM email_processing_attempts epa
+                LEFT JOIN processed_emails pe ON epa.msg_id = pe.msg_id
+                WHERE pe.msg_id IS NULL AND epa.attempts < 3
+                ORDER BY epa.last_attempt_at ASC
+            """).fetchall()
+        return [dict(r) for r in rows]
+
     def is_sms_processed(self, sms_sid):
         with self._conn() as conn:
             row = conn.execute(
