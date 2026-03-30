@@ -66,6 +66,9 @@ function _calGetJobDurationSlots(bd) {
 
 // ── Init ─────────────────────────────────────────────────────
 async function initCalendar() {
+  // Skip refresh if user is actively dragging a booking
+  if (CAL_STATE.dragData) return;
+
   if (!CAL_STATE.weekStart) {
     CAL_STATE.weekStart = _calGetMonday(new Date());
   }
@@ -449,6 +452,9 @@ function _calFormatTime12(hour, minute) {
 
 // ── Render ───────────────────────────────────────────────────
 function renderCalendar() {
+  // Don't re-render while user is dragging — it would destroy the DOM mid-drag
+  if (CAL_STATE.dragData) return;
+
   var container = document.getElementById('ap-calendar-grid');
   if (!container) return;
 
