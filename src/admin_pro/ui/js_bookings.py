@@ -11,8 +11,8 @@ const BOOKINGS_STATE = {
   dateFrom: \'\',
   dateTo:   \'\',
   search:   \'\',
-  sortBy:   \'created_at\',
-  sortDir:  \'desc\',
+  sortBy:   \'preferred_date\',
+  sortDir:  \'asc\',
   selected: new Set(),
   total:    0,
 };
@@ -154,7 +154,10 @@ async function loadBookings() {
 }
 
 function renderBookingsTable(bookings) {
-  const container = document.getElementById(\'bookings-table\');
+  var container = document.getElementById(\'bookings-table\');
+  if (!container) {
+    container = document.getElementById(\'bookings-table-wrap\');
+  }
   if (!container) return;
 
   if (!bookings || bookings.length === 0) {
@@ -167,84 +170,142 @@ function renderBookingsTable(bookings) {
     return;
   }
 
-  function _sortTh(label, col) {
-    var active  = BOOKINGS_STATE.sortBy === col;
-    var dir     = active ? BOOKINGS_STATE.sortDir : \'\';
-    var arrow   = dir === \'asc\' ? \' ↑\' : dir === \'desc\' ? \' ↓\' : \' ↕\';
-    var cls     = \'ap-th ap-th--sort\' + (active ? \' ap-th--sort-active\' : \'\');
-    return \'<th class="\' + cls + \'" onclick="sortBookings(\\'\' + col + \'\\')">\' + label + \'<span class="ap-sort-icon">\' + arrow + \'</span></th>\';
-  }
+  // ── Sort controls bar ──
+  var sortOptions = [
+    { key: \'preferred_date\', label: \'Date\' },
+    { key: \'created_at\', label: \'Created\' },
+    { key: \'status\', label: \'Status\' },
+  ];
+  var sortBarHtml = \'<div class="bk-sort-bar">\' +
+    \'<span class="bk-sort-label">Sort by:</span>\' +
+    sortOptions.map(function(opt) {
+      var active = BOOKINGS_STATE.sortBy === opt.key;
+      var arrow = active ? (BOOKINGS_STATE.sortDir === \'asc\' ? \' ↑\' : \' ↓\') : \'\';
+      return \'<button class="bk-sort-btn\' + (active ? \' bk-sort-btn--active\' : \'\') +
+        \'" onclick="sortBookings(\\'\' + opt.key + \'\\')">\' + opt.label + arrow + \'</button>\';
+    }).join(\'\') +
+    \'<span style="flex:1"></span>\' +
+    \'<span class="bk-count">\' + bookings.length + \' booking\' + (bookings.length === 1 ? \'\' : \'s\') + \'</span>\' +
+    \'</div>\';
 
-  const headerCols = [
-    \'<th class="ap-th ap-th--check"><input type="checkbox" title="Select all" onchange="toggleSelectAllBookings(this.checked)"></th>\',
-    \'<th class="ap-th">#</th>\',
-    \'<th class="ap-th">Customer</th>\',
-    \'<th class="ap-th">Contact</th>\',
-    \'<th class="ap-th">Service</th>\',
-    _sortTh(\'Date / Time\', \'preferred_date\'),
-    \'<th class="ap-th">Address</th>\',
-    _sortTh(\'Status\', \'status\'),
-    _sortTh(\'Created\', \'created_at\'),
-    \'<th class="ap-th ap-th--actions">Actions</th>\',
-  ].join(\'\');
+  // ── Group bookings by date ──
+  var groups = {};
+  var groupOrder = [];
+  bookings.forEach(function(b) {
+    var dateKey = b.preferred_date || \'_unscheduled\';
+    if (!groups[dateKey]) {
+      groups[dateKey] = [];
+      groupOrder.push(dateKey);
+    }
+    groups[dateKey].push(b);
+  });
 
-  const rows = bookings.map(function(b) {
-    const bd  = b.booking_data || {};
-    const id  = b.id || \'\';
-    const shortId = id.substring(0, 8) + \'…\';
+  // Sort groups: unscheduled last, dates sorted
+  groupOrder.sort(function(a, b) {
+    if (a === \'_unscheduled\') return 1;
+    if (b === \'_unscheduled\') return -1;
+    return BOOKINGS_STATE.sortDir === \'asc\' ? a.localeCompare(b) : b.localeCompare(a);
+  });
 
-    const name     = escapeHtml(bd.name || bd.customer_name || \'—\');
-    const email    = escapeHtml(b.customer_email || bd.email || \'—\');
-    const phone    = escapeHtml(bd.phone || bd.mobile || \'—\');
-    const service  = escapeHtml(serviceLabel(bd.service_type || bd.service || \'\'));
-    const rims     = bd.num_rims || bd.rims ? escapeHtml(String(bd.num_rims || bd.rims)) + \' rim(s)\' : \'\';
-    const vehicle  = escapeHtml([bd.vehicle_make, bd.vehicle_model, bd.vehicle_year].filter(Boolean).join(\' \') || bd.vehicle || \'\');
-    const serviceCell = [service, rims, vehicle].filter(Boolean).join(\'<br><small class="ap-muted">\') +
-                        (rims || vehicle ? \'</small>\' : \'\');
+  // Sort bookings within each group by time
+  groupOrder.forEach(function(dateKey) {
+    groups[dateKey].sort(function(a, b) {
+      var tA = (a.booking_data || {}).preferred_time || (a.booking_data || {}).time_slot || \'99:99\';
+      var tB = (b.booking_data || {}).preferred_time || (b.booking_data || {}).time_slot || \'99:99\';
+      return tA.localeCompare(tB);
+    });
+  });
 
-    const dateStr  = b.preferred_date ? formatDate(b.preferred_date) : \'—\';
-    const timeStr  = escapeHtml(bd.preferred_time || bd.time_slot || bd.time || \'\');
-    const dateCell = timeStr ? dateStr + \'<br><small class="ap-muted">\' + timeStr + \'</small>\' : dateStr;
+  var cardsHtml = groupOrder.map(function(dateKey) {
+    var dateLabel = dateKey === \'_unscheduled\' ? \'Unscheduled\' : _bkFormatDateHeading(dateKey);
+    var count = groups[dateKey].length;
 
-    const suburb   = escapeHtml(bd.suburb || bd.address_suburb || \'\');
-    const postcode = escapeHtml(bd.postcode || bd.address_postcode || \'\');
-    const addrCell = [suburb, postcode].filter(Boolean).join(\', \') || \'—\';
+    var cards = groups[dateKey].map(function(b) {
+      var bd = b.booking_data || {};
+      var id = b.id || \'\';
+      var shortId = id.substring(0, 8).toUpperCase();
 
-    const createdAt = b.created_at ? relativeTime(b.created_at) : \'—\';
-    const isSelected = BOOKINGS_STATE.selected.has(id);
+      var name = escapeHtml(bd.name || bd.customer_name || \'Unknown\');
+      var phone = escapeHtml(bd.phone || bd.mobile || \'\');
+      var timeStr = escapeHtml(bd.preferred_time || bd.time_slot || bd.time || \'\');
+      var service = escapeHtml(serviceLabel(bd.service_type || bd.service || \'\'));
+      var rims = bd.num_rims || bd.rims ? escapeHtml(String(bd.num_rims || bd.rims)) : \'\';
+      var vehicle = escapeHtml([bd.vehicle_make, bd.vehicle_model].filter(Boolean).join(\' \') || bd.vehicle || \'\');
+      var suburb = escapeHtml(bd.suburb || bd.address_suburb || \'\');
+      var isSelected = BOOKINGS_STATE.selected.has(id);
 
-    // Action buttons
-    const confirmBtn = (b.status === \'awaiting_owner\')
-      ? \'<button class="ap-btn ap-btn-success ap-btn--xs" title="Confirm" onclick="confirmBooking(\\'\' + id + \'\\')">&#10003;</button>\'
-      : \'\';
-    const declineBtn = (b.status === \'awaiting_owner\')
-      ? \'<button class="ap-btn ap-btn-danger ap-btn--xs" title="Decline" onclick="openDeclineModal(\\'\' + id + \'\\')">&#10007;</button>\'
-      : \'\';
-    const editBtn    = \'<button class="ap-btn ap-btn-ghost ap-btn--xs" title="Edit" onclick="openEditModal(\\'\' + id + \'\\')">&#9998;</button>\';
-    const eventsBtn  = \'<button class="ap-btn ap-btn-ghost ap-btn--xs" title="Events / Audit" onclick="openBookingDetail(\\'\' + id + \'\\')">&#128203;</button>\';
+      // Status class
+      var statusCls = \'bk-status--\' + (b.status || \'unknown\').replace(/[^a-z_]/g, \'\');
+
+      // Action buttons
+      var actions = [];
+      if (b.status === \'awaiting_owner\') {
+        actions.push(\'<button class="bk-action-btn bk-action-confirm" title="Confirm" onclick="event.stopPropagation();confirmBooking(\\'\' + id + \'\\')">&#10003; Confirm</button>\');
+        actions.push(\'<button class="bk-action-btn bk-action-decline" title="Decline" onclick="event.stopPropagation();openDeclineModal(\\'\' + id + \'\\')">&#10007; Decline</button>\');
+      }
+      actions.push(\'<button class="bk-action-btn bk-action-edit" title="Edit" onclick="event.stopPropagation();openEditModal(\\'\' + id + \'\\')">&#9998; Edit</button>\');
+
+      return [
+        \'<div class="bk-card \' + statusCls + (isSelected ? \' bk-card--selected\' : \'\') + \'" data-id="\' + id + \'" onclick="openBookingDetail(\\'\' + id + \'\\')">\',
+        \'  <div class="bk-card-left">\',
+        \'    <input type="checkbox" class="bk-card-check" \' + (isSelected ? \'checked\' : \'\') + \' onclick="event.stopPropagation();toggleBookingSelect(\\'\' + id + \'\\', this.checked)">\',
+        \'    <div class="bk-card-time">\' + (timeStr || \'--:--\') + \'</div>\',
+        \'  </div>\',
+        \'  <div class="bk-card-body">\',
+        \'    <div class="bk-card-row1">\',
+        \'      <span class="bk-card-name">\' + name + \'</span>\',
+        \'      <span class="bk-card-id">#\' + shortId + \'</span>\',
+        \'      \' + statusBadge(b.status),
+        \'    </div>\',
+        \'    <div class="bk-card-row2">\',
+        (service ? \'<span class="bk-tag">\' + service + \'</span>\' : \'\'),
+        (rims ? \'<span class="bk-tag">\' + rims + \' rim\' + (rims === \'1\' ? \'\' : \'s\') + \'</span>\' : \'\'),
+        (vehicle ? \'<span class="bk-tag bk-tag--muted">\' + vehicle + \'</span>\' : \'\'),
+        (suburb ? \'<span class="bk-tag bk-tag--muted">\' + suburb + \'</span>\' : \'\'),
+        (phone ? \'<span class="bk-tag bk-tag--muted">\' + phone + \'</span>\' : \'\'),
+        \'    </div>\',
+        \'  </div>\',
+        \'  <div class="bk-card-actions">\' + actions.join(\'\') + \'</div>\',
+        \'</div>\',
+      ].join(\'\');
+    }).join(\'\');
 
     return [
-      \'<tr class="ap-tr\' + (isSelected ? \' ap-tr--selected\' : \'\') + \'" data-id="\' + id + \'">\',
-      \'  <td class="ap-td ap-td--check"><input type="checkbox" \' + (isSelected ? \'checked\' : \'\') + \' onchange="toggleBookingSelect(\\'\' + id + \'\\', this.checked)"></td>\',
-      \'  <td class="ap-td ap-td--id"><span class="ap-monospace ap-link" onclick="openBookingDetail(\\'\' + id + \'\\')" title="\' + escapeHtml(id) + \'">\' + shortId + \'</span></td>\',
-      \'  <td class="ap-td"><span class="ap-link" onclick="openBookingDetail(\\'\' + id + \'\\')">\' + name + \'</span></td>\',
-      \'  <td class="ap-td ap-td--contact"><small>\' + email + \'<br>\' + phone + \'</small></td>\',
-      \'  <td class="ap-td">\' + serviceCell + \'</td>\',
-      \'  <td class="ap-td ap-td--date">\' + dateCell + \'</td>\',
-      \'  <td class="ap-td ap-td--addr">\' + addrCell + \'</td>\',
-      \'  <td class="ap-td">\' + statusBadge(b.status) + severityBadge(bd.image_assessment) + \'</td>\',
-      \'  <td class="ap-td ap-td--created"><small>\' + createdAt + \'</small></td>\',
-      \'  <td class="ap-td ap-td--actions">\' + confirmBtn + declineBtn + editBtn + eventsBtn + \'</td>\',
-      \'</tr>\',
+      \'<div class="bk-date-group">\',
+      \'  <div class="bk-date-header">\',
+      \'    <span class="bk-date-label">\' + dateLabel + \'</span>\',
+      \'    <span class="bk-date-count">\' + count + \'</span>\',
+      \'  </div>\',
+      cards,
+      \'</div>\',
     ].join(\'\');
   }).join(\'\');
 
-  container.innerHTML = (
-    \'<table class="ap-table ap-table--bookings">\' +
-    \'<thead><tr>\' + headerCols + \'</tr></thead>\' +
-    \'<tbody>\' + rows + \'</tbody>\' +
-    \'</table>\'
-  );
+  container.innerHTML = sortBarHtml + \'<div class="bk-card-list">\' + cardsHtml + \'</div>\';
+}
+
+function _bkFormatDateHeading(dateStr) {
+  try {
+    var parts = dateStr.split(\'-\');
+    var d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+    var today = new Date();
+    today.setHours(0,0,0,0);
+    var tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    var dayTarget = new Date(d);
+    dayTarget.setHours(0,0,0,0);
+
+    var dayNames = [\'Sunday\',\'Monday\',\'Tuesday\',\'Wednesday\',\'Thursday\',\'Friday\',\'Saturday\'];
+    var monthNames = [\'Jan\',\'Feb\',\'Mar\',\'Apr\',\'May\',\'Jun\',\'Jul\',\'Aug\',\'Sep\',\'Oct\',\'Nov\',\'Dec\'];
+
+    var prefix = \'\';
+    if (dayTarget.getTime() === today.getTime()) prefix = \'Today — \';
+    else if (dayTarget.getTime() === tomorrow.getTime()) prefix = \'Tomorrow — \';
+
+    return prefix + dayNames[d.getDay()] + \', \' + d.getDate() + \' \' + monthNames[d.getMonth()] + \' \' + d.getFullYear();
+  } catch(e) {
+    return dateStr;
+  }
 }
 
 // ── Pagination ───────────────────────────────────────────────
@@ -456,22 +517,54 @@ async function openBookingDetail(bookingId) {
           const when   = ev.created_at ? formatDateTime(ev.created_at) : \'\';
           const actor  = escapeHtml(ev.actor || \'system\');
           const evType = escapeHtml((ev.event_type || \'\').replace(/_/g, \' \'));
+          var d = ev.details || {};
           let detail   = \'\';
-          if (ev.details && typeof ev.details === \'object\') {
-            if (ev.details.text) {
-              detail = \'<em>\' + escapeHtml(ev.details.text) + \'</em>\';
-            } else if (ev.details.reason) {
-              detail = \'Reason: <em>\' + escapeHtml(ev.details.reason) + \'</em>\';
-            } else if (ev.details.updated_fields) {
-              detail = \'Fields: \' + escapeHtml(ev.details.updated_fields.join(\', \'));
+          let dotClass = \'ap-timeline-dot\';
+          let icon = \'\';
+
+          // Communication event rendering
+          if (ev.event_type === \'email_received\') {
+            icon = \'&#9993; \';
+            dotClass += \' dot-blue\';
+            var from = d.from ? escapeHtml(d.from) : \'customer\';
+            detail = \'<strong>From:</strong> \' + from;
+            if (d.subject) detail += \'<br><strong>Subject:</strong> \' + escapeHtml(d.subject);
+            if (d.snippet) detail += \'<br><div class="ap-comm-snippet">\' + escapeHtml(d.snippet.substring(0, 300)) + \'</div>\';
+          } else if (ev.event_type === \'email_sent\') {
+            icon = \'&#9993; \';
+            dotClass += \' dot-green\';
+            var to = d.to ? escapeHtml(d.to) : \'customer\';
+            var emailType = d.type ? escapeHtml(d.type.replace(/_/g, \' \')) : \'email\';
+            detail = \'<strong>To:</strong> \' + to + \'<br><strong>Type:</strong> \' + emailType;
+            if (d.missing_fields && d.missing_fields.length) {
+              detail += \'<br><strong>Asked for:</strong> \' + d.missing_fields.map(escapeHtml).join(\', \');
             }
+          } else if (ev.event_type === \'sms_sent\') {
+            icon = \'&#128241; \';
+            dotClass += \' dot-green\';
+            var smsTo = d.to ? escapeHtml(d.to) : \'—\';
+            var smsType = d.type ? escapeHtml(d.type.replace(/_/g, \' \')) : \'sms\';
+            detail = \'<strong>To:</strong> \' + smsTo + \'<br><strong>Type:</strong> \' + smsType;
+          } else if (ev.event_type === \'sms_received\') {
+            icon = \'&#128241; \';
+            dotClass += \' dot-blue\';
+            if (d.snippet) detail = \'<div class="ap-comm-snippet">\' + escapeHtml(d.snippet.substring(0, 200)) + \'</div>\';
+          } else if (d.text) {
+            detail = \'<em>\' + escapeHtml(d.text) + \'</em>\';
+          } else if (d.reason) {
+            detail = \'Reason: <em>\' + escapeHtml(d.reason) + \'</em>\';
+          } else if (d.updated_fields) {
+            detail = \'Fields: \' + escapeHtml(d.updated_fields.join(\', \'));
+          } else if (d.snippet) {
+            detail = \'<div class="ap-comm-snippet">\' + escapeHtml(d.snippet.substring(0, 200)) + \'</div>\';
           }
+
           return (
             \'<div class="ap-timeline-item">\' +
-            \'  <div class="ap-timeline-dot"></div>\' +
+            \'  <div class="\' + dotClass + \'"></div>\' +
             \'  <div class="ap-timeline-content">\' +
             \'    <div class="ap-timeline-header">\' +
-            \'      <span class="ap-timeline-type">\' + evType + \'</span>\' +
+            \'      <span class="ap-timeline-type">\' + icon + evType + \'</span>\' +
             \'      <span class="ap-muted ap-timeline-actor">by \' + actor + \'</span>\' +
             \'    </div>\' +
             (detail ? \'<div class="ap-timeline-detail">\' + detail + \'</div>\' : \'\') +

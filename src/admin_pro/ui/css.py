@@ -1506,6 +1506,22 @@ body.ap-body {
   flex-shrink: 0;
   margin-top: 4px;
 }
+.dot-blue { background: #3b82f6 !important; opacity: 1 !important; }
+.dot-green { background: #22c55e !important; opacity: 1 !important; }
+.ap-comm-snippet {
+  background: var(--ap-bg-hover, rgba(0,0,0,0.04));
+  border-left: 3px solid var(--ap-border, #e2e8f0);
+  padding: 6px 10px;
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ap-text-muted, #64748b);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+  border-radius: 4px;
+}
 .ap-timeline-content { flex: 1; min-width: 0; }
 .ap-timeline-header { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
 .ap-timeline-type {
@@ -1906,6 +1922,188 @@ body.ap-body {
 .ap-bulk-count {
   font-size: 12px;
   color: var(--ap-text-muted);
+}
+
+/* --- Booking Cards (bk-) ---------------------------------- */
+.bk-sort-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 12px;
+  border-bottom: 1px solid var(--ap-border);
+  margin-bottom: 12px;
+}
+.bk-sort-label {
+  font-size: 12px;
+  color: var(--ap-text-muted);
+  white-space: nowrap;
+}
+.bk-sort-btn {
+  background: transparent;
+  border: 1px solid var(--ap-border);
+  color: var(--ap-text-muted);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all .15s;
+}
+.bk-sort-btn:hover { border-color: var(--ap-primary); color: var(--ap-text); }
+.bk-sort-btn--active {
+  background: var(--ap-primary);
+  border-color: var(--ap-primary);
+  color: #fff;
+}
+.bk-count {
+  font-size: 12px;
+  color: var(--ap-text-muted);
+  white-space: nowrap;
+}
+.bk-card-list { display: flex; flex-direction: column; gap: 16px; }
+.bk-date-group { }
+.bk-date-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0 8px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--ap-card);
+}
+.bk-date-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ap-text);
+  letter-spacing: .02em;
+}
+.bk-date-count {
+  background: var(--ap-border);
+  color: var(--ap-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 10px;
+}
+
+.bk-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--ap-surface);
+  border: 1px solid var(--ap-border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color .15s, box-shadow .15s;
+  margin-bottom: 6px;
+}
+.bk-card:hover {
+  border-color: var(--ap-primary-light);
+  box-shadow: 0 0 0 1px var(--ap-primary-light);
+}
+.bk-card--selected {
+  border-color: var(--ap-primary);
+  background: rgba(200,16,46,.06);
+}
+/* Left-border accent per status */
+.bk-status--awaiting_owner { border-left: 3px solid var(--ap-amber); }
+.bk-status--confirmed      { border-left: 3px solid var(--ap-green); }
+.bk-status--declined       { border-left: 3px solid var(--ap-red); }
+.bk-status--completed      { border-left: 3px solid #6b7280; }
+.bk-status--cancelled      { border-left: 3px solid #6b7280; }
+
+.bk-card-left {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 60px;
+  flex-shrink: 0;
+}
+.bk-card-check { cursor: pointer; accent-color: var(--ap-primary); }
+.bk-card-time {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ap-text);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.bk-card-body { flex: 1; min-width: 0; }
+.bk-card-row1 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.bk-card-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--ap-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+.bk-card-id {
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--ap-text-muted);
+}
+
+.bk-card-row2 {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.bk-tag {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(255,255,255,.06);
+  color: var(--ap-text-secondary, var(--ap-text));
+  white-space: nowrap;
+}
+.bk-tag--muted {
+  color: var(--ap-text-muted);
+  background: rgba(255,255,255,.03);
+}
+
+.bk-card-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity .15s;
+}
+.bk-card:hover .bk-card-actions { opacity: 1; }
+
+.bk-action-btn {
+  background: transparent;
+  border: 1px solid var(--ap-border);
+  color: var(--ap-text-muted);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all .15s;
+}
+.bk-action-btn:hover { border-color: var(--ap-text-muted); color: var(--ap-text); }
+.bk-action-confirm { color: var(--ap-green); border-color: var(--ap-green); }
+.bk-action-confirm:hover { background: var(--ap-green); color: #fff; }
+.bk-action-decline { color: var(--ap-red); border-color: var(--ap-red); }
+.bk-action-decline:hover { background: var(--ap-red); color: #fff; }
+
+/* Mobile: stack cards vertically, always show actions */
+@media (max-width: 640px) {
+  .bk-card { flex-wrap: wrap; padding: 10px; }
+  .bk-card-left { flex-direction: row; min-width: unset; width: 100%; justify-content: space-between; }
+  .bk-card-body { width: 100%; }
+  .bk-card-actions { opacity: 1; width: 100%; justify-content: flex-end; }
+  .bk-card-name { max-width: 160px; }
 }
 
 /* --- Pagination ------------------------------------------- */

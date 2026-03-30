@@ -350,25 +350,8 @@ HTML_SECTIONS = """
       </div>
     </div>
 
-    <div class="ap-table-wrap" id="bookings-table-wrap" aria-live="polite">
-      <table class="ap-table ap-table-hover" id="bookings-table" aria-label="All bookings">
-        <thead>
-          <tr>
-            <th class="ap-th-check"><input type="checkbox" id="select-all-bookings" onchange="toggleSelectAll(this)" aria-label="Select all bookings"></th>
-            <th class="ap-th-sortable" onclick="sortBookings('name')">Customer <span class="ap-sort-arrow">↕</span></th>
-            <th class="ap-th-sortable" onclick="sortBookings('date')">Date <span class="ap-sort-arrow">↕</span></th>
-            <th>Time</th>
-            <th>Service</th>
-            <th>Rims</th>
-            <th>Suburb</th>
-            <th class="ap-th-sortable" onclick="sortBookings('status')">Status <span class="ap-sort-arrow">↕</span></th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody id="bookings-tbody">
-          <tr><td colspan="9" class="ap-table-empty">Loading bookings…</td></tr>
-        </tbody>
-      </table>
+    <div id="bookings-table" aria-live="polite">
+      <div class="ap-loading">Loading bookings…</div>
     </div>
 
     <div class="ap-pagination" id="bookings-pagination">
