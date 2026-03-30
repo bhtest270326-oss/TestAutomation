@@ -316,16 +316,15 @@ SCENARIOS: List[Scenario] = [
 
     Scenario(
         id="happy_complete",
-        name="[Happy] Complete first email → booking + owner SMS + calendar",
+        name="[Happy] Complete first email → availability table sent, awaiting customer confirmation",
         email_body="Hi, I need a rim repair. Jane Smith, 0412345678, Volvo XC60 2020, "
                    "1 rim, kerb rash, 12 Test St Cannington, 10 April 2026.",
         extracted_data=FULL_BOOKING.copy(),
         missing_fields=[],
         expect_booking_created=True,
         expect_email_sent=True,
-        expect_owner_sms=True,
-        expect_calendar_invite=True,
-        expect_label="Awaiting Confirmation",
+        expect_pending_clarification=True,
+        expect_label="Pending Reply",
         expect_processed=True,
     ),
 
@@ -455,16 +454,15 @@ SCENARIOS: List[Scenario] = [
 
     Scenario(
         id="date_full",
-        name="[Date] Requested date full → date-full email + waitlist entry",
+        name="[Date] Requested date full → availability table shows date as full, customer picks new date",
         email_body="Hi, complete booking, all details provided, 10 April.",
         extracted_data=FULL_BOOKING.copy(),
         missing_fields=[],
         date_available=False,   # slot finder returns NEXT day
         expect_email_sent=True,
-        expect_date_full_email=True,
-        expect_booking_created=False,
-        expect_pending_clarification=True,  # re-asks for new date
-        expect_waitlist_entry=True,
+        expect_booking_created=True,  # early booking for logging
+        expect_pending_clarification=True,  # awaiting customer confirmation
+        expect_label="Pending Reply",
         expect_processed=True,
     ),
 
@@ -524,10 +522,10 @@ SCENARIOS: List[Scenario] = [
         id="availability_inquiry",
         name="[Avail] Availability inquiry → availability table sent",
         email_body="Are you available next week for 2 rims?",
-        is_availability_inquiry_result=True,
         extracted_data={**PARTIAL_BOOKING, "num_rims": 2},
         missing_fields=["Your preferred date"],
         expect_email_sent=True,
+        expect_booking_created=True,
         expect_pending_clarification=True,
         expect_processed=True,
     ),
@@ -565,8 +563,8 @@ SCENARIOS: List[Scenario] = [
         expect_booking_created=True,
         expect_email_sent=True,
         expect_booking_note_contains="POSSIBLE DUPLICATE",
-        expect_owner_sms=True,
-        expect_calendar_invite=True,
+        expect_pending_clarification=True,
+        expect_label="Pending Reply",
         expect_processed=True,
         # Pre-existing booking inserted in runner setup
     ),
@@ -612,8 +610,8 @@ SCENARIOS: List[Scenario] = [
         expect_email_sent=True,
         expect_dlq_entry=True,
         expect_booking_note_contains="LOW AI CONFIDENCE",
-        expect_owner_sms=True,
-        expect_calendar_invite=True,
+        expect_pending_clarification=True,
+        expect_label="Pending Reply",
         expect_processed=True,
     ),
 
@@ -646,16 +644,15 @@ SCENARIOS: List[Scenario] = [
 
     Scenario(
         id="flag_sms_off",
-        name="[Flag] auto_sms_owner=False → booking created, no SMS but calendar still created",
+        name="[Flag] auto_sms_owner=False → booking created, awaiting customer confirmation",
         email_body="Complete booking, all details.",
         extracted_data=FULL_BOOKING.copy(),
         missing_fields=[],
         flag_auto_sms_owner=False,
         expect_booking_created=True,
         expect_email_sent=True,
-        expect_owner_sms=False,
-        expect_calendar_invite=True,   # calendar runs in parallel regardless of SMS
-        expect_label="Awaiting Confirmation",
+        expect_pending_clarification=True,
+        expect_label="Pending Reply",
         expect_processed=True,
     ),
 
@@ -670,8 +667,8 @@ SCENARIOS: List[Scenario] = [
         missing_fields=[],
         expect_booking_created=True,
         expect_email_sent=True,
-        expect_owner_sms=True,
-        expect_calendar_invite=True,
+        expect_pending_clarification=True,
+        expect_label="Pending Reply",
         expect_processed=True,
     ),
 
@@ -710,8 +707,8 @@ SCENARIOS: List[Scenario] = [
         missing_fields=[],
         expect_booking_created=True,
         expect_email_sent=True,
-        expect_owner_sms=True,
-        expect_calendar_invite=True,
+        expect_pending_clarification=True,
+        expect_label="Pending Reply",
         expect_processed=True,
     ),
 
@@ -725,9 +722,9 @@ SCENARIOS: List[Scenario] = [
         missing_fields=[],
         expect_booking_created=True,
         expect_email_sent=True,
-        expect_owner_sms=True,
-        expect_calendar_invite=True,
         expect_booking_note_contains="Returning customer",
+        expect_pending_clarification=True,
+        expect_label="Pending Reply",
         expect_processed=True,
         # Service history pre-inserted in runner
     ),
@@ -745,8 +742,8 @@ SCENARIOS: List[Scenario] = [
         missing_fields=[],
         expect_booking_created=True,
         expect_email_sent=True,
-        expect_owner_sms=True,
-        expect_calendar_invite=True,
+        expect_pending_clarification=True,
+        expect_label="Pending Reply",
         expect_processed=True,
     ),
 
@@ -760,8 +757,8 @@ SCENARIOS: List[Scenario] = [
         missing_fields=[],
         expect_booking_created=True,
         expect_email_sent=True,
-        expect_owner_sms=True,
-        expect_calendar_invite=True,
+        expect_pending_clarification=True,
+        expect_label="Pending Reply",
         expect_processed=True,
     ),
 

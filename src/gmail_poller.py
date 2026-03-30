@@ -360,14 +360,6 @@ def _process_single_message_inner(service, state, msg_id):
             logger.info(f"Email from {customer_email} is not a booking request — leaving untouched")
             state.mark_email_processed(msg_id)
             return
-        try:
-            from ai_parser import is_availability_inquiry
-            if is_availability_inquiry(subject, body):
-                logger.info(f"Availability inquiry detected from {customer_email} — sending availability table")
-                handle_availability_inquiry(msg_id, thread_id, subject, body, customer_email)
-                return
-        except Exception as e:
-            logger.error(f"Availability inquiry check failed for {customer_email}: {e}")
         email_images = _extract_image_attachments(payload)
         try:
             handle_new_enquiry(
@@ -1066,151 +1058,64 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
     except Exception as e:
         logger.error(f"Service area check error: {e}")
 
-    if needs_clarification:
-        # Create clarification record FIRST so retries route correctly
-        # (if email send fails, the retry will find this record and re-enter
-        # handle_clarification_reply instead of hitting _handle_active_booking_reply)
-        state.create_pending_clarification(
-            booking_data=booking_data,
-            customer_email=customer_email,
-            thread_id=thread_id,
-            msg_id=msg_id,
-            missing_fields=missing_fields
-        )
+    # --- ALL first-contact emails: send availability table + ask for
+    # confirmation / missing details. Owner is NOT notified until the
+    # customer confirms. Only manual dashboard entries bypass this. ---
 
-        # Create booking for communication logging
-        booking_data['missing_fields'] = missing_fields
-        early_id = None
-        try:
-            early_id = state.create_pending_booking(
-                booking_data=booking_data,
-                source='email',
-                customer_email=customer_email,
-                raw_message=body,
-                msg_id=msg_id,
-                thread_id=thread_id
+    # --- Duplicate / Repeat Customer Detection ---
+    try:
+        duplicate = _check_duplicate_booking(state, customer_email, booking_data)
+        if duplicate:
+            logger.warning(
+                f"Duplicate booking detected: same customer+vehicle as booking "
+                f"{duplicate['id']} ({duplicate['status']}) created {duplicate['created_at']}"
             )
+            existing_notes = booking_data.get('notes', '') or ''
+            booking_data['notes'] = (
+                f"POSSIBLE DUPLICATE: Same vehicle as booking {duplicate['id']} "
+                f"({duplicate['status']}). {existing_notes}"
+            ).strip()
+    except Exception as e:
+        logger.error(f"Duplicate check error: {e}")
+
+    # Check for returning customer
+    try:
+        from state_manager import _get_conn
+        import json as _json
+        with _get_conn() as _conn:
+            _hist = _conn.execute(
+                """SELECT csh.completed_date, csh.service_type
+                   FROM customer_service_history csh
+                   WHERE csh.customer_email = ?
+                   ORDER BY csh.completed_date DESC LIMIT 1""",
+                (customer_email,)
+            ).fetchone()
+        if _hist:
+            last_date = _hist['completed_date']
+            last_svc = (_hist['service_type'] or 'wheel repair').replace('_', ' ')
+            returning_note = f"Returning customer — last service: {last_date} ({last_svc})"
+            existing_notes = booking_data.get('notes') or ''
+            booking_data['notes'] = (existing_notes + '\n' + returning_note).strip()
+            logger.info(f"Returning customer detected: {customer_email}, last service {last_date}")
+    except Exception as _e:
+        logger.debug(f"Returning customer check failed (non-fatal): {_e}")
+
+    # --- Image Analysis ---
+    if images:
+        try:
+            from image_analyser import analyse_rim_images
+            assessment = analyse_rim_images(images)
+            if assessment:
+                booking_data['image_assessment'] = assessment
+                logger.info("Image assessment stored for booking from %s", customer_email)
         except Exception as e:
-            logger.error(f"Could not create early booking for comm logging: {e}")
+            logger.warning("Image analysis failed (non-fatal): %s", e)
 
-        if early_id:
-            try:
-                state.log_booking_event(early_id, 'email_received', actor='customer',
-                    details={'from': customer_email, 'subject': subject, 'snippet': body[:500]})
-                state.log_booking_event(early_id, 'created', actor='ai',
-                    details={'confidence': confidence, 'customer_email': customer_email,
-                             'needs_clarification': True, 'missing_fields': missing_fields})
-            except Exception as e:
-                logger.error(f"Could not log early booking events: {e}")
-
-        if get_flag('flag_auto_email_replies'):
-            send_clarification_email(service, customer_email, subject, missing_fields,
-                                      thread_id=thread_id, message_id_header=message_id_header,
-                                      booking_data=booking_data)
-            if early_id:
-                try:
-                    state.log_booking_event(early_id, 'email_sent', actor='ai',
-                        details={'to': customer_email, 'type': 'clarification',
-                                 'missing_fields': missing_fields})
-                except Exception:
-                    pass
-        else:
-            logger.info(f"Auto email replies disabled — clarification not sent to {customer_email}")
-        _apply_label_with_retry(label_pending_reply, service, msg_id)
-        logger.info(f"Clarification sent to {customer_email}, thread {thread_id}")
-        state.mark_email_processed(msg_id)
-    else:
-        # --- Duplicate / Repeat Customer Detection ---
-        try:
-            duplicate = _check_duplicate_booking(state, customer_email, booking_data)
-            if duplicate:
-                logger.warning(
-                    f"Duplicate booking detected: same customer+vehicle as booking "
-                    f"{duplicate['id']} ({duplicate['status']}) created {duplicate['created_at']}"
-                )
-                existing_notes = booking_data.get('notes', '') or ''
-                booking_data['notes'] = (
-                    f"POSSIBLE DUPLICATE: Same vehicle as booking {duplicate['id']} "
-                    f"({duplicate['status']}). {existing_notes}"
-                ).strip()
-        except Exception as e:
-            logger.error(f"Duplicate check error: {e}")
-
-        # --- Date Availability Check ---
-        # If the customer has specified a date, verify it actually has room.
-        # If full, send a polite rejection with updated availability rather than
-        # silently rebooking them on a different day.
-        preferred_date = booking_data.get('preferred_date')
-        if preferred_date and not _is_date_available(preferred_date, booking_data, state):
-            first_name = (booking_data.get('customer_name') or 'there').split()[0]
-            logger.info(f"Requested date {preferred_date} is full for {customer_email} — sending date-full reply")
-            _send_date_full_email(
-                service, customer_email, subject, preferred_date,
-                first_name, booking_data, thread_id, state
-            )
-            # Auto-enroll in waitlist for the requested but unavailable date
-            if preferred_date:
-                try:
-                    wid = state.add_to_waitlist(
-                        customer_name=booking_data.get('customer_name') or 'Unknown',
-                        customer_email=customer_email,
-                        customer_phone=booking_data.get('customer_phone'),
-                        service_type=booking_data.get('service_type'),
-                        preferred_dates=[preferred_date],
-                        preferred_suburb=booking_data.get('suburb'),
-                        rim_count=booking_data.get('num_rims', 1),
-                        notes=f"Auto-enrolled from date-full reply. Thread: {thread_id}"
-                    )
-                    logger.info(f"Customer {customer_email} added to waitlist for {preferred_date} (waitlist ID: {wid})")
-                except Exception as e:
-                    logger.warning(f"Waitlist enroll failed (non-fatal): {e}")
-            # Keep as a pending clarification so the next reply is handled correctly
-            state.create_pending_clarification(
-                booking_data=booking_data,
-                customer_email=customer_email,
-                thread_id=thread_id,
-                msg_id=msg_id,
-                missing_fields=['your preferred available day']
-            )
-            _apply_label_with_retry(label_pending_reply, service, msg_id)
-            state.mark_email_processed(msg_id)
-            return
-
-        # Check for returning customer
-        try:
-            from state_manager import _get_conn
-            import json as _json
-            with _get_conn() as _conn:
-                _hist = _conn.execute(
-                    """SELECT csh.completed_date, csh.service_type
-                       FROM customer_service_history csh
-                       WHERE csh.customer_email = ?
-                       ORDER BY csh.completed_date DESC LIMIT 1""",
-                    (customer_email,)
-                ).fetchone()
-            if _hist:
-                last_date = _hist['completed_date']
-                last_svc = (_hist['service_type'] or 'wheel repair').replace('_', ' ')
-                returning_note = f"Returning customer — last service: {last_date} ({last_svc})"
-                existing_notes = booking_data.get('notes') or ''
-                booking_data['notes'] = (existing_notes + '\n' + returning_note).strip()
-                logger.info(f"Returning customer detected: {customer_email}, last service {last_date}")
-        except Exception as _e:
-            logger.debug(f"Returning customer check failed (non-fatal): {_e}")
-
-        # --- Image Analysis ---
-        if images:
-            try:
-                from image_analyser import analyse_rim_images
-                assessment = analyse_rim_images(images)
-                if assessment:
-                    booking_data['image_assessment'] = assessment
-                    logger.info("Image assessment stored for booking from %s", customer_email)
-            except Exception as e:
-                logger.warning("Image analysis failed (non-fatal): %s", e)
-
-        _assign_best_slot(booking_data, state)
-        pending_id = state.create_pending_booking(
+    # Create early booking for communication logging (not sent to owner yet)
+    booking_data['missing_fields'] = missing_fields if needs_clarification else []
+    early_id = None
+    try:
+        early_id = state.create_pending_booking(
             booking_data=booking_data,
             source='email',
             customer_email=customer_email,
@@ -1218,44 +1123,39 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
             msg_id=msg_id,
             thread_id=thread_id
         )
+    except Exception as e:
+        logger.error(f"Could not create early booking for comm logging: {e}")
 
-        # Log the initial customer email and creation event
+    if early_id:
         try:
-            state.log_booking_event(
-                pending_id, 'email_received', actor='customer',
-                details={'from': customer_email, 'subject': subject, 'snippet': body[:500]}
-            )
-            state.log_booking_event(
-                pending_id, 'created', actor='ai',
-                details={'confidence': confidence, 'customer_email': customer_email}
-            )
+            state.log_booking_event(early_id, 'email_received', actor='customer',
+                details={'from': customer_email, 'subject': subject, 'snippet': body[:500]})
+            state.log_booking_event(early_id, 'created', actor='ai',
+                details={'confidence': confidence, 'customer_email': customer_email,
+                         'needs_clarification': needs_clarification,
+                         'missing_fields': missing_fields,
+                         'awaiting_customer_confirmation': True})
         except Exception as e:
-            logger.error(f"Could not log booking creation event: {e}")
+            logger.error(f"Could not log booking creation events: {e}")
 
-        # Send acknowledgment email to the customer so they know we received their request
-        if get_flag('flag_auto_email_replies'):
-            try:
-                _send_booking_acknowledgment(service, customer_email, subject, booking_data,
-                                              thread_id=thread_id, message_id_header=message_id_header)
-                logger.info(f"Booking acknowledgment sent to {customer_email}")
-                try:
-                    state.log_booking_event(pending_id, 'email_sent', actor='ai',
-                        details={'to': customer_email, 'type': 'acknowledgment'})
-                except Exception:
-                    pass
-            except Exception as e:
-                logger.error(f"Failed to send acknowledgment email to {customer_email}: {e}")
-                # Don't block the flow — the owner SMS and label are more critical
-
-        send_owner_confirmation_request(pending_id, booking_data)
+    # Send availability table + any missing field requests.
+    # format_availability_response handles both: shows the table AND lists
+    # any fields still needed, all in one email.
+    _send_availability_confirmation(
+        service, state, msg_id, thread_id, subject, body, customer_email,
+        booking_data, missing_fields=missing_fields if needs_clarification else [],
+        message_id_header=message_id_header,
+    )
+    if early_id:
         try:
-            state.log_booking_event(pending_id, 'sms_sent', actor='system',
-                details={'to': 'owner', 'type': 'confirmation_request'})
+            state.log_booking_event(early_id, 'email_sent', actor='ai',
+                details={'to': customer_email, 'type': 'availability_confirmation',
+                         'missing_fields': missing_fields if needs_clarification else []})
         except Exception:
             pass
-        _apply_label_with_retry(label_awaiting_confirmation, service, msg_id)
-        logger.info(f"Owner confirmation sent for booking {pending_id}")
-        state.mark_email_processed(msg_id)
+    _apply_label_with_retry(label_pending_reply, service, msg_id)
+    logger.info(f"Availability + confirmation sent to {customer_email}, thread {thread_id}")
+    state.mark_email_processed(msg_id)
 
 
 def handle_clarification_reply(service, state, msg_id, thread_id, existing_pending, body, subject, customer_email, message_id_header=None):
@@ -1703,3 +1603,113 @@ def _send_booking_acknowledgment(service, to_email, original_subject, booking_da
 
     send_customer_email(service, to_email, subject, content,
                         thread_id=thread_id, message_id_header=message_id_header)
+
+
+def _send_availability_confirmation(service, state, msg_id, thread_id, subject, body,
+                                     customer_email, booking_data, missing_fields=None,
+                                     message_id_header=None):
+    """Send availability table + extracted details and ask the customer to confirm.
+
+    Used for ALL first-contact email enquiries. The customer must reply to confirm
+    before the owner is notified. Creates a pending clarification so the reply
+    routes to handle_clarification_reply.
+
+    missing_fields: list of fields still needed from the customer (in addition to
+                    date confirmation). Shown in the email alongside the availability table.
+    """
+    from ai_parser import format_availability_response
+    from maps_handler import get_week_availability, get_job_duration_minutes
+    from feature_flags import get_flag
+
+    if missing_fields is None:
+        missing_fields = []
+
+    # Build the combined missing fields list for the pending clarification
+    clarification_fields = list(missing_fields) if missing_fields else []
+    if not any('date' in f.lower() or 'confirm' in f.lower() for f in clarification_fields):
+        clarification_fields.append('confirmation of your preferred date')
+
+    if not get_flag('flag_auto_email_replies'):
+        logger.info(f"Auto email replies disabled — skipping availability confirmation for {customer_email}")
+        state.create_pending_clarification(
+            booking_data=booking_data,
+            customer_email=customer_email,
+            thread_id=thread_id,
+            msg_id=msg_id,
+            missing_fields=clarification_fields,
+        )
+        return
+
+    # Calculate job duration for the availability table
+    try:
+        duration = get_job_duration_minutes(booking_data)
+    except Exception:
+        duration = 120
+
+    # Build service description
+    num_rims = booking_data.get('num_rims')
+    svc_type = (booking_data.get('service_type') or '').lower()
+    if svc_type == 'paint_touchup':
+        service_description = 'paint touch-up'
+    elif num_rims:
+        try:
+            service_description = f"{int(num_rims)}-wheel repair"
+        except (ValueError, TypeError):
+            service_description = 'wheel repair'
+    else:
+        service_description = 'wheel repair'
+        duration = 120
+
+    customer_name = booking_data.get('customer_name') or 'there'
+    first_name = customer_name.split()[0].title() if customer_name != 'there' else 'there'
+
+    # Get availability — centre around requested date if far future
+    requested_date = booking_data.get('preferred_date')
+    from_date_str = None
+    if requested_date:
+        try:
+            from datetime import timedelta
+            req_dt = datetime.strptime(requested_date, '%Y-%m-%d').date()
+            today = datetime.now().date()
+            if (req_dt - today).days > 14:
+                days_since_monday = req_dt.weekday()
+                from_date_str = (req_dt - timedelta(days=days_since_monday)).strftime('%Y-%m-%d')
+        except (ValueError, TypeError):
+            pass
+
+    try:
+        availability = get_week_availability(duration, from_date_str=from_date_str, assumed_travel_minutes=25)
+    except Exception as e:
+        logger.error(f"get_week_availability failed for {customer_email}: {e}")
+        availability = []
+
+    if from_date_str and availability:
+        try:
+            near_availability = get_week_availability(duration, assumed_travel_minutes=25)
+            far_dates = {s['date'] for s in availability}
+            unique_near = [s for s in near_availability if s['date'] not in far_dates]
+            if unique_near:
+                availability = unique_near + availability
+        except Exception:
+            pass
+
+    # Create pending clarification BEFORE sending (retry safety)
+    state.create_pending_clarification(
+        booking_data=booking_data,
+        customer_email=customer_email,
+        thread_id=thread_id,
+        msg_id=msg_id,
+        missing_fields=clarification_fields,
+    )
+
+    # Format availability email — include any fields still needed from the customer
+    from email_utils import send_customer_email as _send_email
+    inner_html = format_availability_response(
+        first_name, availability, service_description,
+        missing_fields=missing_fields if missing_fields else None,
+        requested_date=requested_date,
+    )
+    reply_subject = subject if subject.lower().startswith('re:') else f"Re: {subject}"
+    _send_email(service, customer_email, reply_subject, inner_html,
+                thread_id=thread_id, message_id_header=message_id_header)
+    logger.info(f"Availability confirmation sent to {customer_email} ({service_description}, {duration} min)")
