@@ -817,7 +817,9 @@ def handle_availability_inquiry(msg_id, thread_id, subject, body, customer_email
 
     Attempts to extract service details (rim count, service type) to calculate
     the required duration. Falls back to the default 2-rim duration if unclear.
-    Checks the next 5 business days and replies with a formatted availability table.
+    Checks the next 10+ business days and replies with a formatted availability table.
+    If the customer mentions a specific far-future date, the table is centred around
+    that date's week and near-term availability is prepended.
     """
     from ai_parser import extract_booking_details, format_availability_response, is_booking_request
     from maps_handler import get_week_availability, get_job_duration_minutes
@@ -868,13 +870,45 @@ def handle_availability_inquiry(msg_id, thread_id, subject, body, customer_email
         state.mark_email_processed(msg_id)
         return
 
-    # Get week availability
+    # Get week availability — if the customer mentioned a specific date that falls
+    # beyond our default 10-day window, start the window from that date's Monday
+    # so the table is centred around the date they care about.
+    requested_date = booking_data.get('preferred_date')
+    from_date_str = None
+    if requested_date:
+        try:
+            from datetime import timedelta
+            req_dt = datetime.strptime(requested_date, '%Y-%m-%d').date()
+            today = datetime.now().date()
+            # If the requested date is more than 14 days out, start from the
+            # Monday of that week so the table includes their requested day.
+            if (req_dt - today).days > 14:
+                days_since_monday = req_dt.weekday()  # 0=Mon
+                from_date_str = (req_dt - timedelta(days=days_since_monday)).strftime('%Y-%m-%d')
+        except (ValueError, TypeError):
+            pass
+
     try:
-        availability = get_week_availability(duration, assumed_travel_minutes=25)
+        availability = get_week_availability(duration, from_date_str=from_date_str, assumed_travel_minutes=25)
     except Exception as e:
         logger.error(f"get_week_availability failed: {e}")
         state.mark_email_processed(msg_id)
         return
+
+    # If we started the window from a far-future date, also prepend the default
+    # (today-based) availability so the customer sees both near-term and their
+    # requested window.
+    if from_date_str:
+        try:
+            near_availability = get_week_availability(duration, assumed_travel_minutes=25)
+            # Deduplicate: only keep near-term days that don't overlap with the
+            # far-future window.
+            far_dates = {s['date'] for s in availability}
+            unique_near = [s for s in near_availability if s['date'] not in far_dates]
+            if unique_near:
+                availability = unique_near + availability
+        except Exception as e:
+            logger.warning(f"Could not prepend near-term availability: {e}")
 
     # Format and send the response.
     # ORDERING: create the pending clarification BEFORE sending the email so that
@@ -884,7 +918,6 @@ def handle_availability_inquiry(msg_id, thread_id, subject, body, customer_email
     # will be reused when the next polling cycle retries.
     from email_utils import send_customer_email
 
-    requested_date = booking_data.get('preferred_date')
     inner_html = format_availability_response(
         first_name, availability, service_description,
         missing_fields=missing_fields if missing_fields else None,
