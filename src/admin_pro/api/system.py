@@ -402,6 +402,40 @@ def register(bp, require_auth):
             logger.exception("Calendar sync failed")
             return jsonify({'ok': False, 'error': 'Calendar sync failed'}), 500
 
+    # ------------------------------------------------------------------
+    # POST /api/gmail/poll — manual Gmail inbox poll
+    # ------------------------------------------------------------------
+    @bp.route('/api/gmail/poll', methods=['POST'])
+    @require_auth
+    def gmail_poll():
+        try:
+            from gmail_poller import poll_gmail
+            poll_gmail()
+            return jsonify({'ok': True, 'message': 'Gmail poll complete'})
+        except Exception:
+            logger.exception("Gmail poll failed")
+            return jsonify({'ok': False, 'error': 'Gmail poll failed'}), 500
+
+    # ------------------------------------------------------------------
+    # GET /api/system/recent-activity — last N booking events for debugging
+    # ------------------------------------------------------------------
+    @bp.route('/api/system/recent-activity', methods=['GET'])
+    @require_auth
+    def recent_activity():
+        try:
+            limit = min(int(request.args.get('limit', 20)), 100)
+            conn = sqlite3.connect(DB_PATH, timeout=5)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM booking_events ORDER BY created_at DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+            conn.close()
+            return jsonify({'events': [dict(r) for r in rows]})
+        except Exception:
+            logger.exception("recent-activity error")
+            return jsonify({'ok': False, 'error': 'Failed to fetch activity'}), 500
+
 
 # ---------------------------------------------------------------------------
 from admin_pro import admin_pro_bp, require_auth  # noqa: E402

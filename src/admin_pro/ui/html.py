@@ -702,6 +702,7 @@ HTML_SECTIONS = """
       </div>
       <div class="ap-health-label">Gmail API</div>
       <div class="ap-health-status" id="health-gmail-status">—</div>
+      <button class="ap-btn ap-btn-sm ap-btn-ghost" onclick="manualGmailPoll()" style="margin-top:8px;font-size:11px">↻ Poll Now</button>
     </div>
     <div class="ap-card ap-health-card" id="health-calendar">
       <div class="ap-health-icon">

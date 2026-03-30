@@ -40,6 +40,17 @@ async function loadSystemHealth() {
   }
 }
 
+async function manualGmailPoll() {
+  try {
+    showToast('Polling Gmail inbox…', 'info');
+    await apiFetch('/v2/api/gmail/poll', { method: 'POST' });
+    showToast('Gmail poll complete', 'success');
+    loadSystemHealth();
+  } catch (err) {
+    showToast('Gmail poll failed: ' + err.message, 'error');
+  }
+}
+
 // ── Feature Flags ─────────────────────────────────────────────────────────────
 
 async function loadFeatureFlags() {
