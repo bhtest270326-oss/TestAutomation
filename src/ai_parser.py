@@ -260,10 +260,14 @@ def is_availability_inquiry(subject: str, body: str) -> bool:
             messages=[{
                 'role': 'user',
                 'content': (
-                    "Does this email primarily ask about AVAILABILITY or SCHEDULING "
-                    "(e.g. 'when are you free?', 'what slots do you have?', "
-                    "'are you available next week?', 'when can you come?') "
-                    "rather than requesting a specific date?\n\n"
+                    "Does this email ask about AVAILABILITY or SCHEDULING?\n\n"
+                    "Answer YES if the customer:\n"
+                    "- Asks when you are free/available (e.g. 'when are you free?', 'what slots do you have?')\n"
+                    "- Asks about availability on a specific date (e.g. 'are you available next Tuesday?', 'can you do Thursday?')\n"
+                    "- Asks about availability for a general timeframe (e.g. 'are you available next week?', 'when can you come?')\n\n"
+                    "Answer NO only if the customer is clearly REQUESTING a booking on a specific date "
+                    "without any question about availability (e.g. 'I'd like to book for next Monday', "
+                    "'Please book me in for the 15th').\n\n"
                     "Answer only YES or NO.\n\n"
                     f"{text}"
                 ),

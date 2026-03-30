@@ -576,7 +576,7 @@ def find_next_available_slot(target_date_str, new_address, day_bookings,
 
 def get_week_availability(duration_minutes: int, from_date_str: str = None,
                           assumed_travel_minutes: int = 25, num_days: int = 10) -> list:
-    """Check availability for the next 5 business days.
+    """Check availability for the next *num_days* business days (default 10).
 
     For each day, determines whether a contiguous block of `duration_minutes`
     can be fitted within business hours (8am–5pm) given existing confirmed bookings.
