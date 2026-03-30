@@ -720,6 +720,9 @@ async function openEditModal(bookingId) {
 
     showModal(\'Edit Booking \' + bookingId.substring(0, 8) + \'…\', body, footer);
 
+    // ── Google Places Autocomplete on address field ──
+    _initAddressAutocomplete();
+
   } catch (err) {
     showModal(\'Error\', \'<p class="ap-text--error">Failed to load booking: \' + escapeHtml(err.message) + \'</p>\', \'\');
   }
@@ -835,6 +838,74 @@ async function addNote(bookingId) {
     openBookingDetail(bookingId);
   } catch (err) {
     showToast(\'Could not add note: \' + err.message, \'error\');
+  }
+}
+
+// ── Google Places Autocomplete for address field ─────────────
+function _initAddressAutocomplete() {
+  var input = document.getElementById('edit-address');
+  if (!input) return;
+
+  function _attach() {
+    if (!window.google || !window.google.maps || !window.google.maps.places) return;
+    var autocomplete = new google.maps.places.Autocomplete(input, {
+      componentRestrictions: { country: 'au' },
+      fields: ['address_components', 'formatted_address'],
+      types: ['address'],
+    });
+    autocomplete.addListener('place_changed', function() {
+      var place = autocomplete.getPlace();
+      if (!place || !place.address_components) return;
+      // Fill in address, suburb, postcode from selected place
+      input.value = place.formatted_address || '';
+      var suburb = '', postcode = '';
+      place.address_components.forEach(function(c) {
+        if (c.types.indexOf('locality') !== -1) suburb = c.long_name;
+        if (c.types.indexOf('postal_code') !== -1) postcode = c.long_name;
+      });
+      var suburbEl = document.getElementById('edit-suburb');
+      var postcodeEl = document.getElementById('edit-postcode');
+      if (suburbEl && suburb) suburbEl.value = suburb;
+      if (postcodeEl && postcode) postcodeEl.value = postcode;
+    });
+  }
+
+  // If Google Maps already loaded (route section visited), attach immediately
+  if (window.google && window.google.maps && window.google.maps.places) {
+    _attach();
+    return;
+  }
+
+  // Load Maps JS API with Places library if not yet loaded
+  if (!window._mapsApiKey) {
+    // Fetch the API key from the route endpoint
+    apiFetch('/api/route/' + new Date().toISOString().slice(0, 10)).then(function(data) {
+      if (data && data.maps_api_key) {
+        window._mapsApiKey = data.maps_api_key;
+        _loadMapsAndAttach();
+      }
+    }).catch(function() {});
+  } else {
+    _loadMapsAndAttach();
+  }
+
+  function _loadMapsAndAttach() {
+    if (document.getElementById('google-maps-script')) {
+      // Script tag exists — wait for it to load
+      var check = setInterval(function() {
+        if (window.google && window.google.maps && window.google.maps.places) {
+          clearInterval(check);
+          _attach();
+        }
+      }, 200);
+      return;
+    }
+    var script = document.createElement('script');
+    script.id = 'google-maps-script';
+    script.src = 'https://maps.googleapis.com/maps/api/js?key=' + window._mapsApiKey + '&libraries=places';
+    script.async = true;
+    script.onload = function() { _attach(); };
+    document.head.appendChild(script);
   }
 }
 

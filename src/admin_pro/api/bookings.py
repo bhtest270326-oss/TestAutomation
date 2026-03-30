@@ -16,9 +16,9 @@ logger = logging.getLogger(__name__)
 # Allowlist of valid booking data field names
 _ALLOWED_BOOKING_FIELDS = {
     'customer_name', 'customer_email', 'customer_phone', 'vehicle_make',
-    'vehicle_model', 'vehicle_colour', 'service_type', 'num_rims',
-    'preferred_date', 'preferred_time', 'address', 'suburb', 'notes',
-    'confidence', 'address_notes', 'missing_fields', 'name', 'phone',
+    'vehicle_model', 'vehicle_colour', 'vehicle_year', 'service_type', 'num_rims',
+    'preferred_date', 'preferred_time', 'address', 'suburb', 'postcode', 'notes',
+    'confidence', 'address_notes', 'missing_fields', 'name', 'phone', 'email',
     '_confirmation_pin',
 }
 
@@ -622,6 +622,17 @@ def register(bp, require_auth):
                         logger.info("Admin edit: date cleared for booking %s, calendar event %s preserved", booking_id, event_id)
                 except Exception:
                     logger.exception("Admin edit: calendar sync failed for booking %s (non-blocking)", booking_id)
+
+            # ── Route re-optimization: if address changed on a confirmed booking ──
+            address_changed = any(k in body for k in ('address', 'suburb', 'postcode'))
+            if address_changed and status == 'confirmed' and merged.get('preferred_date'):
+                try:
+                    from scheduler import optimize_daily_routes
+                    import threading
+                    threading.Thread(target=optimize_daily_routes, daemon=True).start()
+                    logger.info("Admin edit: address changed, triggered route re-optimization")
+                except Exception:
+                    logger.warning("Route re-optimization trigger failed (non-blocking)", exc_info=True)
 
             state.log_booking_event(
                 booking_id, 'data_updated', actor='owner_ui',

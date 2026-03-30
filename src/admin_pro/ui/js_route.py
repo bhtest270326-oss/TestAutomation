@@ -273,6 +273,9 @@ function _initRouteMap(data) {
   var canvas = document.getElementById('route-map-canvas');
   var fallback = document.getElementById('route-map-fallback');
 
+  // Store API key globally so other features (edit modal autocomplete) can use it
+  if (data.maps_api_key) window._mapsApiKey = data.maps_api_key;
+
   if (!data.maps_api_key) {
     // No API key — show static fallback
     _showStaticMapFallback(data);
@@ -303,7 +306,7 @@ function _initRouteMap(data) {
 
   var script = document.createElement('script');
   script.id = 'google-maps-script';
-  script.src = 'https://maps.googleapis.com/maps/api/js?key=' + data.maps_api_key + '&callback=_onGoogleMapsLoaded';
+  script.src = 'https://maps.googleapis.com/maps/api/js?key=' + data.maps_api_key + '&libraries=places&callback=_onGoogleMapsLoaded';
   script.async = true;
   script.defer = true;
   script.onerror = function() {
