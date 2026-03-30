@@ -789,7 +789,7 @@ SCENARIOS: List[Scenario] = [
         expect_clarification_email=False,
         expect_pending_clarification=True,
         expect_processed=False,
-        expect_label="Pending Reply",
+        expect_label=None,
     ),
 
     Scenario(
