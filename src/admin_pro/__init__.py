@@ -247,7 +247,16 @@ def require_auth(f):
             jsonify({'ok': False, 'error': 'Unauthorized'}),
             401
         )
-        # Do NOT set WWW-Authenticate header — it causes browser PIN/credential prompts
+        # Send WWW-Authenticate on browser page navigations (so login dialog appears)
+        # but NOT on API/fetch calls (where it causes browser PIN/credential spam)
+        if admin_password:
+            is_api_call = (
+                request.path.startswith('/v2/api/')
+                or 'application/json' in (request.accept_mimetypes or '')
+                or request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+            )
+            if not is_api_call:
+                response.headers['WWW-Authenticate'] = 'Basic realm="Admin"'
         return response
 
     return decorated
