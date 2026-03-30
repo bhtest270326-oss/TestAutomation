@@ -447,6 +447,13 @@ def _ensure_schema(conn):
         );
         CREATE INDEX IF NOT EXISTS idx_comp_prices_svc ON competitor_prices(service_type);
         CREATE INDEX IF NOT EXISTS idx_comp_prices_comp ON competitor_prices(competitor_id);
+
+        CREATE TABLE IF NOT EXISTS email_processing_attempts (
+            msg_id          TEXT PRIMARY KEY,
+            attempts        INTEGER NOT NULL DEFAULT 0,
+            last_error      TEXT,
+            last_attempt_at TEXT
+        );
     """
     conn.executescript(schema_sql)
     conn.commit()
