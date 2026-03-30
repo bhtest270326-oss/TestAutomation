@@ -330,7 +330,6 @@ function _renderGoogleMap(data) {
 
   canvas.innerHTML = '';
 
-  // Perth center
   var center = { lat: -31.9505, lng: 115.8605 };
   var map = new google.maps.Map(canvas, {
     zoom: 11,
@@ -341,122 +340,104 @@ function _renderGoogleMap(data) {
   });
   ROUTE_STATE.map = map;
 
-  var bounds = new google.maps.LatLngBounds();
   var infoWindow = new google.maps.InfoWindow();
   ROUTE_STATE.infoWindow = infoWindow;
 
-  // Geocode addresses and place markers
-  var geocoder = new google.maps.Geocoder();
-  var positions = [];
-  var pending = data.stops.length + 1; // +1 for base
+  // Build waypoints for Directions API
+  var base = data.base_address + ', Perth WA, Australia';
+  var stopAddresses = [];
+  data.stops.forEach(function(stop) {
+    if (stop.address) stopAddresses.push(stop.address + ', Perth WA, Australia');
+  });
 
-  function addMarker(position, label, title, contentHtml, isBase) {
-    var marker = new google.maps.Marker({
-      position: position,
-      map: map,
-      label: isBase ? { text: 'B', color: '#fff', fontWeight: '600' } : { text: String(label), color: '#fff', fontWeight: '600' },
-      title: title,
-      icon: {
-        path: google.maps.SymbolPath.CIRCLE,
-        scale: isBase ? 14 : 16,
-        fillColor: isBase ? '#6b7280' : '#C41230',
-        fillOpacity: 1,
-        strokeColor: '#fff',
-        strokeWeight: 2,
-      },
-      zIndex: isBase ? 1 : 2,
-    });
-
-    marker.addListener('click', function() {
-      infoWindow.setContent(contentHtml);
-      infoWindow.open(map, marker);
-    });
-
-    ROUTE_STATE.markers.push(marker);
-    bounds.extend(position);
+  if (stopAddresses.length === 0) {
+    _showStaticMapFallback(data);
+    return;
   }
 
-  function tryGeocode(address, callback) {
-    geocoder.geocode({ address: address + ', Perth WA, Australia' }, function(results, status) {
-      if (status === 'OK' && results[0]) {
-        var loc = results[0].geometry.location;
-        callback({ lat: loc.lat(), lng: loc.lng() });
-      } else {
-        callback(null);
-      }
-    });
-  }
+  // Use Directions service to render actual driving route
+  var directionsService = new google.maps.DirectionsService();
+  var directionsRenderer = new google.maps.DirectionsRenderer({
+    map: map,
+    suppressMarkers: true,
+    polylineOptions: {
+      strokeColor: '#C41230',
+      strokeOpacity: 0.8,
+      strokeWeight: 4,
+    },
+  });
 
-  function onAllGeocoded() {
-    // Draw polyline
-    if (positions.length > 1) {
-      var validPositions = positions.filter(function(p) { return p !== null; });
-      if (validPositions.length > 1) {
-        ROUTE_STATE.polyline = new google.maps.Polyline({
-          path: validPositions,
-          geodesic: true,
-          strokeColor: '#C41230',
-          strokeOpacity: 0.8,
-          strokeWeight: 3,
-          icons: [{
-            icon: { path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW, scale: 3, strokeColor: '#C41230' },
-            offset: '50%',
-            repeat: '200px',
-          }],
-        });
-        ROUTE_STATE.polyline.setMap(map);
-      }
-    }
+  // Origin = base, destination = base (return trip)
+  // Waypoints = all stops in order
+  var waypoints = stopAddresses.map(function(addr) {
+    return { location: addr, stopover: true };
+  });
 
-    // Fit bounds
-    if (!bounds.isEmpty()) {
-      map.fitBounds(bounds, { top: 40, right: 40, bottom: 40, left: 40 });
-    }
-  }
+  directionsService.route({
+    origin: base,
+    destination: base,
+    waypoints: waypoints,
+    travelMode: google.maps.TravelMode.DRIVING,
+    optimizeWaypoints: false,
+  }, function(result, status) {
+    if (status === 'OK') {
+      directionsRenderer.setDirections(result);
 
-  // Geocode base address first
-  tryGeocode(data.base_address, function(pos) {
-    if (pos) {
-      positions[0] = pos;
-      addMarker(pos, 'B', 'Base: ' + data.base_address,
+      // Add custom markers on top of the route
+      var route = result.routes[0];
+      var legs = route.legs;
+
+      // Base marker (start)
+      _addRouteMarker(map, infoWindow, legs[0].start_location, 'B', 'Base',
         '<div style="padding:4px"><strong>Base</strong><br>' + escapeHtml(data.base_address) + '</div>', true);
+
+      // Stop markers
+      data.stops.forEach(function(stop, idx) {
+        if (idx < legs.length) {
+          var pos = legs[idx].end_location;
+          var service = stop.service_type
+            ? stop.service_type.replace(/_/g, ' ').replace(/\\b\\w/g, function(c) { return c.toUpperCase(); })
+            : 'Service';
+          var infoHtml = '<div style="padding:4px;max-width:250px">' +
+            '<strong>' + escapeHtml(stop.customer_name || 'Customer') + '</strong><br>' +
+            '<span style="color:#64748b">' + escapeHtml(stop.address || '') + '</span><br>' +
+            '<span style="color:#C41230">' + escapeHtml(stop.arrival_time || '') + '</span> - ' +
+            escapeHtml(service) +
+            (stop.num_rims ? ' (' + stop.num_rims + ' rims)' : '') +
+            '</div>';
+          _addRouteMarker(map, infoWindow, pos, String(idx + 1), stop.customer_name || stop.address, infoHtml, false);
+        }
+      });
     } else {
-      positions[0] = null;
+      console.warn('Directions request failed:', status);
+      _showStaticMapFallback(data);
     }
-    pending--;
-    if (pending === 0) onAllGeocoded();
+  });
+}
+
+function _addRouteMarker(map, infoWindow, position, label, title, contentHtml, isBase) {
+  var marker = new google.maps.Marker({
+    position: position,
+    map: map,
+    label: { text: label, color: '#fff', fontWeight: '600' },
+    title: title,
+    icon: {
+      path: google.maps.SymbolPath.CIRCLE,
+      scale: isBase ? 14 : 16,
+      fillColor: isBase ? '#6b7280' : '#C41230',
+      fillOpacity: 1,
+      strokeColor: '#fff',
+      strokeWeight: 2,
+    },
+    zIndex: isBase ? 1 : 2,
   });
 
-  // Geocode each stop
-  data.stops.forEach(function(stop, idx) {
-    var address = stop.address || '';
-    positions[idx + 1] = null; // placeholder
-
-    if (!address) {
-      pending--;
-      if (pending === 0) onAllGeocoded();
-      return;
-    }
-
-    tryGeocode(address, function(pos) {
-      if (pos) {
-        positions[idx + 1] = pos;
-        var service = stop.service_type
-          ? stop.service_type.replace(/_/g, ' ').replace(/\\b\\w/g, function(c) { return c.toUpperCase(); })
-          : 'Service';
-        var infoHtml = '<div style="padding:4px;max-width:250px">' +
-          '<strong>' + escapeHtml(stop.customer_name || 'Customer') + '</strong><br>' +
-          '<span style="color:#64748b">' + escapeHtml(address) + '</span><br>' +
-          '<span style="color:#C41230">' + escapeHtml(stop.arrival_time || '') + '</span> - ' +
-          escapeHtml(service) +
-          (stop.num_rims ? ' (' + stop.num_rims + ' rims)' : '') +
-          '</div>';
-        addMarker(pos, idx + 1, stop.customer_name || address, infoHtml, false);
-      }
-      pending--;
-      if (pending === 0) onAllGeocoded();
-    });
+  marker.addListener('click', function() {
+    infoWindow.setContent(contentHtml);
+    infoWindow.open(map, marker);
   });
+
+  ROUTE_STATE.markers.push(marker);
 }
 
 // ── Static map fallback ──────────────────────────────────────
