@@ -535,11 +535,16 @@ def recover_stale_emails():
             return
 
         recovered = 0
+        from email_utils import gmail_send_is_blocked
         for msg_ref in messages:
             msg_id = msg_ref['id']
             if state.is_email_processed(msg_id) and _should_reprocess_stale(state, msg_id):
                 logger.warning(f"Stale email recovery: re-processing {msg_id}")
                 state.unmark_email_processed(msg_id)
+                if gmail_send_is_blocked():
+                    # Just unmark — retry_failed_emails will pick it up when rate limit lifts
+                    recovered += 1
+                    continue
                 _process_single_message(service, state, msg_id)
                 recovered += 1
 
@@ -559,6 +564,11 @@ def retry_failed_emails():
     messages that errored after partial processing and need another try.
     """
     try:
+        # Skip retries entirely if Gmail sending is rate-limited
+        from email_utils import gmail_send_is_blocked
+        if gmail_send_is_blocked():
+            return
+
         state = StateManager()
         failed = state.get_failed_unprocessed_messages()
         if not failed:
@@ -567,6 +577,10 @@ def retry_failed_emails():
         service = get_gmail_service()
         retried = 0
         for row in failed:
+            # Re-check rate limit between each retry in case a send just triggered it
+            if gmail_send_is_blocked():
+                logger.info(f"Gmail rate limit hit during retry — pausing retries ({retried} done)")
+                break
             msg_id = row['msg_id']
             attempts = row['attempts']
             logger.info(f"Retrying failed email {msg_id} (attempt {attempts + 1})")

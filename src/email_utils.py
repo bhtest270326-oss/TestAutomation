@@ -8,17 +8,67 @@ Colour scheme matches the Perth Swedish & European Auto Centre banner:
 """
 
 import os
+import re
 import hmac
 import hashlib
 import secrets
 import time as _ts_time
 import base64
 import logging
+import threading
+from datetime import datetime, timezone
 from html import escape as esc
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Gmail send rate-limit gate
+# When a 429 is received, we parse the "Retry after <ISO timestamp>" from the
+# error and block all sends until that time.  This prevents wasting AI tokens
+# generating responses that can't be sent.
+# ---------------------------------------------------------------------------
+_gmail_send_blocked_until: float = 0.0   # Unix timestamp
+_gmail_send_lock = threading.Lock()
+
+
+class GmailRateLimitError(Exception):
+    """Raised when Gmail sending is blocked due to a prior 429 rate-limit."""
+    def __init__(self, retry_after_ts: float):
+        remaining = max(0, retry_after_ts - _ts_time.time())
+        super().__init__(
+            f"Gmail send blocked — rate limit active for {remaining:.0f}s more"
+        )
+        self.retry_after_ts = retry_after_ts
+
+
+def gmail_send_is_blocked() -> bool:
+    """Return True if Gmail sending is currently blocked by a rate limit."""
+    return _ts_time.time() < _gmail_send_blocked_until
+
+
+def _record_gmail_429(error_message: str) -> None:
+    """Parse a Gmail 429 error and set the send block until the retry-after time."""
+    global _gmail_send_blocked_until
+    # Extract ISO timestamp from: "Retry after 2026-03-30T17:13:39.664Z"
+    match = re.search(r'Retry after (\d{4}-\d{2}-\d{2}T[\d:.]+Z)', str(error_message))
+    if match:
+        try:
+            retry_dt = datetime.fromisoformat(match.group(1).replace('Z', '+00:00'))
+            retry_ts = retry_dt.timestamp()
+        except (ValueError, OSError):
+            retry_ts = _ts_time.time() + 900  # fallback: 15 min
+    else:
+        retry_ts = _ts_time.time() + 900  # fallback: 15 min
+
+    with _gmail_send_lock:
+        if retry_ts > _gmail_send_blocked_until:
+            _gmail_send_blocked_until = retry_ts
+            remaining = retry_ts - _ts_time.time()
+            logger.warning(f"Gmail send rate limit active — blocking sends for {remaining:.0f}s")
+
 
 # ---------------------------------------------------------------------------
 # Reschedule token secret — must be set in env vars for production security
@@ -194,7 +244,16 @@ def send_customer_email(
     if thread_id:
         send_body['threadId'] = thread_id
 
-    service.users().messages().send(userId='me', body=send_body).execute()
+    # Check rate limit before attempting send
+    if gmail_send_is_blocked():
+        raise GmailRateLimitError(_gmail_send_blocked_until)
+
+    try:
+        service.users().messages().send(userId='me', body=send_body).execute()
+    except Exception as e:
+        if '429' in str(e) or 'rateLimitExceeded' in str(e):
+            _record_gmail_429(str(e))
+        raise
 
 
 def _token_hash(token: str) -> str:
