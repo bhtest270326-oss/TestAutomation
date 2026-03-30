@@ -423,23 +423,24 @@ function _calComputeOverlapLayout(bookings) {
   });
 
   // Find overlapping groups and set totalCols for each group
-  // Two items overlap if their vertical ranges intersect
+  // Only count direct overlaps — two items overlap if their
+  // own vertical ranges intersect (no transitive expansion).
   for (var i = 0; i < items.length; i++) {
-    // Find all items that transitively overlap with this one
-    var group = [i];
-    var maxCol = items[i].col;
-    var groupBottom = items[i].bottom;
-    for (var j = i + 1; j < items.length; j++) {
-      if (items[j].top < groupBottom) {
-        group.push(j);
-        if (items[j].col > maxCol) maxCol = items[j].col;
-        if (items[j].bottom > groupBottom) groupBottom = items[j].bottom;
+    var directOverlaps = [i];
+    for (var j = 0; j < items.length; j++) {
+      if (j === i) continue;
+      // Direct overlap: j starts before i ends AND i starts before j ends
+      if (items[j].top < items[i].bottom && items[i].top < items[j].bottom) {
+        directOverlaps.push(j);
       }
     }
-    var totalCols = maxCol + 1;
-    group.forEach(function(idx) {
-      if (totalCols > items[idx].totalCols) items[idx].totalCols = totalCols;
+    // totalCols = how many items directly overlap with this one (including itself)
+    var maxCol = 0;
+    directOverlaps.forEach(function(idx) {
+      if (items[idx].col > maxCol) maxCol = items[idx].col;
     });
+    var totalCols = maxCol + 1;
+    if (totalCols > items[i].totalCols) items[i].totalCols = totalCols;
   }
 
   // Return map of bookingId -> { col, totalCols, top, bottom }

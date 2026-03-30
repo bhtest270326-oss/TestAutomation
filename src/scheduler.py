@@ -542,16 +542,18 @@ def sync_google_calendar(days_ahead=21):
         gcal_date = gcal_dt.get('date', '')
         gcal_time = gcal_dt.get('time', '')
 
-        if local_date != gcal_date or local_time != gcal_time:
-            logger.info("Calendar sync: booking %s drifted — local=%s %s, gcal=%s %s → updating local",
-                        booking_id, local_date, local_time, gcal_date, gcal_time)
+        # Only sync DATE changes from Google Calendar (owner moved to different day).
+        # Time is controlled by the dashboard route optimizer — don't overwrite it
+        # from Google Calendar, which may default to 12:00 or reflect a drag.
+        if local_date != gcal_date:
+            logger.info("Calendar sync: booking %s date drifted — local=%s, gcal=%s → updating local date",
+                        booking_id, local_date, gcal_date)
             bd['preferred_date'] = gcal_date
-            bd['preferred_time'] = gcal_time
             state.update_confirmed_booking_data(booking_id, bd)
             state.log_booking_event(
                 booking_id, 'calendar_sync', actor='system',
-                details={'old_date': local_date, 'old_time': local_time,
-                         'new_date': gcal_date, 'new_time': gcal_time}
+                details={'old_date': local_date, 'new_date': gcal_date,
+                         'note': 'date synced from Google Calendar (time unchanged)'}
             )
             stats['updated'] += 1
 
