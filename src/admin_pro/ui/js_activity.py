@@ -171,6 +171,12 @@ function getEventIcon(type) {
     cancelled:              '🚫',
     'morning_notification': '☀',
     'day_prior_reminder':   '🔔',
+    email_received:         '📩',
+    email_sent:             '📧',
+    sms_sent:               '📱',
+    sms_received:           '📲',
+    calendar_sync:          '🔄',
+    data_updated:           '✏',
     default:                '●',
   };
   return icons[type] || icons.default;
@@ -186,6 +192,11 @@ function getEventColor(type) {
     created:                'blue',
     note:                   'purple',
     rescheduled:            'teal',
+    email_received:         'blue',
+    email_sent:             'green',
+    sms_sent:               'green',
+    sms_received:           'blue',
+    calendar_sync:          'teal',
   };
   return colors[type] || 'muted';
 }

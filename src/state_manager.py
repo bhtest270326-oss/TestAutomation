@@ -1057,6 +1057,15 @@ class StateManager:
             'missing_fields': json.loads(row['missing_fields'] or '[]'),
         }
 
+    def get_booking_by_thread(self, thread_id):
+        """Return the booking dict for a given thread_id, or None."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM bookings WHERE thread_id=? ORDER BY created_at DESC LIMIT 1",
+                (thread_id,)
+            ).fetchone()
+        return self._booking_row_to_dict(row) if row else None
+
     def thread_has_active_booking(self, thread_id):
         with self._conn() as conn:
             row = conn.execute("""

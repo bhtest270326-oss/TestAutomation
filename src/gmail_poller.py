@@ -368,6 +368,13 @@ def _handle_active_booking_reply(state, thread_id, body_text, customer_email, ms
         status = row['status']
         customer_name = booking.get('customer_name', 'Customer')
 
+        # Log incoming customer email on active booking
+        try:
+            state.log_booking_event(booking_id, 'email_received', actor='customer',
+                details={'from': customer_email, 'snippet': body_text[:500]})
+        except Exception:
+            pass
+
         if _detect_cancel_intent(body_text):
             logger.info(f"Cancellation intent detected on thread {thread_id} (booking {booking_id})")
             try:
@@ -1027,10 +1034,35 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
         logger.error(f"Service area check error: {e}")
 
     if needs_clarification:
+        # Create booking immediately so all communications are logged from the start
+        booking_data['missing_fields'] = missing_fields
+        early_id = state.create_pending_booking(
+            booking_data=booking_data,
+            source='email',
+            customer_email=customer_email,
+            raw_message=body,
+            msg_id=msg_id,
+            thread_id=thread_id
+        )
+        try:
+            state.log_booking_event(early_id, 'email_received', actor='customer',
+                details={'from': customer_email, 'subject': subject, 'snippet': body[:500]})
+            state.log_booking_event(early_id, 'created', actor='ai',
+                details={'confidence': confidence, 'customer_email': customer_email,
+                         'needs_clarification': True, 'missing_fields': missing_fields})
+        except Exception as e:
+            logger.error(f"Could not log early booking events: {e}")
+
         if get_flag('flag_auto_email_replies'):
             send_clarification_email(service, customer_email, subject, missing_fields,
                                       thread_id=thread_id, message_id_header=message_id_header,
                                       booking_data=booking_data)
+            try:
+                state.log_booking_event(early_id, 'email_sent', actor='ai',
+                    details={'to': customer_email, 'type': 'clarification',
+                             'missing_fields': missing_fields})
+            except Exception:
+                pass
         else:
             logger.info(f"Auto email replies disabled — clarification not sent to {customer_email}")
         state.create_pending_clarification(
@@ -1044,7 +1076,7 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
             label_pending_reply(service, msg_id)
         except Exception as e:
             logger.warning("Could not apply pending-reply label for %s: %s", msg_id, e)
-        logger.info(f"Clarification sent to {customer_email}, thread {thread_id}")
+        logger.info(f"Clarification sent to {customer_email}, thread {thread_id} (booking {early_id})")
     else:
         # --- Duplicate / Repeat Customer Detection ---
         try:
@@ -1148,8 +1180,12 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
             thread_id=thread_id
         )
 
-        # Log creation event with confidence level
+        # Log the initial customer email and creation event
         try:
+            state.log_booking_event(
+                pending_id, 'email_received', actor='customer',
+                details={'from': customer_email, 'subject': subject, 'snippet': body[:500]}
+            )
             state.log_booking_event(
                 pending_id, 'created', actor='ai',
                 details={'confidence': confidence, 'customer_email': customer_email}
@@ -1158,6 +1194,11 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
             logger.error(f"Could not log booking creation event: {e}")
 
         send_owner_confirmation_request(pending_id, booking_data)
+        try:
+            state.log_booking_event(pending_id, 'sms_sent', actor='system',
+                details={'to': 'owner', 'type': 'confirmation_request'})
+        except Exception:
+            pass
         try:
             label_awaiting_confirmation(service, msg_id)
         except Exception as e:
@@ -1170,6 +1211,18 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
     original_data = existing_pending.get('booking_data', {})
     _mixed_draft_id = None      # set in mixed block; used after slot assignment
     _mixed_question_body = None
+
+    # Find the linked booking (created at first contact) for communication logging
+    _linked_booking = state.get_booking_by_thread(thread_id)
+    _linked_bid = _linked_booking['id'] if _linked_booking else None
+
+    # Log incoming customer email
+    if _linked_bid:
+        try:
+            state.log_booking_event(_linked_bid, 'email_received', actor='customer',
+                details={'from': customer_email, 'subject': subject, 'snippet': body[:500]})
+        except Exception:
+            pass
 
     # --- Intent Classification ---
     # Before extracting booking details, classify whether this reply is a question
@@ -1196,6 +1249,12 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
                 from email_utils import send_customer_email
                 send_customer_email(service, customer_email, reply_subject, faq_html, thread_id=thread_id)
                 logger.info(f"FAQ auto-reply sent to {customer_email}")
+                if _linked_bid:
+                    try:
+                        state.log_booking_event(_linked_bid, 'email_sent', actor='ai',
+                            details={'to': customer_email, 'type': 'faq_response'})
+                    except Exception:
+                        pass
             else:
                 logger.info(f"Auto email replies disabled — FAQ reply not sent to {customer_email}")
         except Exception as _fe:
@@ -1390,9 +1449,20 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
             send_clarification_email(service, customer_email, subject, still_missing,
                                       thread_id=thread_id, message_id_header=message_id_header,
                                       booking_data=merged_data)
+            if _linked_bid:
+                try:
+                    state.log_booking_event(_linked_bid, 'email_sent', actor='ai',
+                        details={'to': customer_email, 'type': 'clarification',
+                                 'missing_fields': still_missing})
+                except Exception:
+                    pass
         else:
             logger.info(f"Auto email replies disabled — follow-up clarification not sent to {customer_email}")
         state.update_clarification_booking_data(existing_pending['id'], merged_data, still_missing)
+        # Also update the linked booking's data
+        if _linked_bid:
+            merged_data['missing_fields'] = still_missing
+            state.update_pending_booking_data(_linked_bid, merged_data)
         try:
             label_pending_reply(service, msg_id)
         except Exception as e:
@@ -1419,18 +1489,38 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
             state.mark_email_processed(msg_id)
             return
 
-        # Remove clarification record, create proper pending booking
+        # Remove clarification record, update existing booking or create one
         state.remove_pending_clarification(existing_pending['id'])
+        # Remove the missing_fields marker now that all data is collected
+        merged_data.pop('missing_fields', None)
         _assign_best_slot(merged_data, state)
-        pending_id = state.create_pending_booking(
-            booking_data=merged_data,
-            source='email',
-            customer_email=customer_email,
-            raw_message=body,
-            msg_id=msg_id,
-            thread_id=thread_id
-        )
+
+        if _linked_bid:
+            # Booking was already created at first contact — update it with final data
+            state.update_pending_booking_data(_linked_bid, merged_data)
+            pending_id = _linked_bid
+            try:
+                state.log_booking_event(pending_id, 'data_updated', actor='ai',
+                    details={'status': 'clarification_complete', 'fields_collected': True})
+            except Exception:
+                pass
+        else:
+            # Fallback: create booking if none was created at first contact (legacy path)
+            pending_id = state.create_pending_booking(
+                booking_data=merged_data,
+                source='email',
+                customer_email=customer_email,
+                raw_message=body,
+                msg_id=msg_id,
+                thread_id=thread_id
+            )
+
         send_owner_confirmation_request(pending_id, merged_data)
+        try:
+            state.log_booking_event(pending_id, 'sms_sent', actor='system',
+                details={'to': 'owner', 'type': 'confirmation_request'})
+        except Exception:
+            pass
         try:
             label_awaiting_confirmation(service, msg_id)
         except Exception as e:

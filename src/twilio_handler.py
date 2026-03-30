@@ -562,8 +562,18 @@ def handle_owner_confirm(pending_id, pending):
     confirmation_msg = build_customer_confirmation_sms(booking_data)
     if customer_phone and get_flag('flag_auto_sms_customer'):
         send_sms(customer_phone, confirmation_msg)
+        try:
+            state.log_booking_event(pending_id, 'sms_sent', actor='system',
+                details={'to': customer_phone, 'type': 'customer_confirmation'})
+        except Exception:
+            pass
     if customer_email and get_flag('flag_auto_email_customer'):
         send_confirmation_email(customer_email, booking_data, booking_id=pending_id, thread_id=pending.get('thread_id'))
+        try:
+            state.log_booking_event(pending_id, 'email_sent', actor='system',
+                details={'to': customer_email, 'type': 'customer_confirmation'})
+        except Exception:
+            pass
     gmail_msg_id = pending.get('gmail_msg_id')
     if gmail_msg_id:
         try:
