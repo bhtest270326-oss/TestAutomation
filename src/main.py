@@ -111,11 +111,12 @@ def main():
 
     if PUBSUB_ENABLED:
         logger.info("Pub/Sub mode: real-time Gmail webhooks enabled")
-        register_gmail_watch()
     else:
         logger.info("Polling mode: no PUBSUB_TOPIC_NAME set, using 60-second poll")
 
     # Start background thread (scheduled tasks + optional polling)
+    # Gmail watch registration is handled in the background loop to avoid
+    # blocking Flask startup and failing the Railway healthcheck.
     bg = threading.Thread(target=_background_loop, daemon=True, name="background")
     bg.start()
 
