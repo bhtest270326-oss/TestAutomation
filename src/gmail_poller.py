@@ -285,10 +285,55 @@ def extract_email_address(from_header):
 def _process_single_message(service, state, msg_id):
     """Fetch and process one Gmail message by ID. Used by both poll and webhook paths."""
     if state.is_email_processed(msg_id):
-        return
+        # Check if this email was actually acted on. If it was marked processed
+        # by old buggy code that didn't send anything, re-process it.
+        if _should_reprocess_stale(state, msg_id):
+            logger.warning(f"Message {msg_id} marked processed but has no booking/clarification — re-processing")
+            state.unmark_email_processed(msg_id)
+        else:
+            logger.info(f"Skipping already-processed message {msg_id}")
+            return
 
+    logger.info(f"Starting to process message {msg_id}")
     with trace_span("process_email"):
         _process_single_message_inner(service, state, msg_id)
+
+
+def _should_reprocess_stale(state, msg_id):
+    """Return True if a processed email has no associated booking, clarification, or DLQ entry.
+
+    This catches emails that were marked processed by old buggy code without
+    any action being taken. They need to be re-processed.
+    """
+    try:
+        from state_manager import _get_conn
+        with _get_conn() as conn:
+            # Check if there's a booking with this msg_id
+            booking = conn.execute(
+                "SELECT id FROM bookings WHERE msg_id = ? LIMIT 1", (msg_id,)
+            ).fetchone()
+            if booking:
+                return False
+
+            # Check if there's a pending clarification with this msg_id
+            clarification = conn.execute(
+                "SELECT id FROM clarifications WHERE msg_id = ? LIMIT 1", (msg_id,)
+            ).fetchone()
+            if clarification:
+                return False
+
+            # Check if it's in the DLQ (intentionally processed as a failure)
+            dlq = conn.execute(
+                "SELECT id FROM failed_extractions WHERE gmail_msg_id = ? LIMIT 1", (msg_id,)
+            ).fetchone()
+            if dlq:
+                return False
+
+        # No evidence of any action — this was a stale/buggy mark
+        return True
+    except Exception as e:
+        logger.debug(f"_should_reprocess_stale check failed for {msg_id}: {e}")
+        return False  # fail safe — don't re-process on error
 
 
 def _process_single_message_inner(service, state, msg_id):
@@ -449,6 +494,40 @@ def _handle_active_booking_reply(state, thread_id, body_text, customer_email, ms
 
     except Exception as e:
         logger.error(f"Error handling active booking reply on thread {thread_id}: {e}", exc_info=True)
+
+
+def recover_stale_emails():
+    """Scan recent inbox and re-process any emails that were marked processed but never acted on.
+
+    Called once at startup to catch emails botched by previous buggy code.
+    """
+    try:
+        service = get_gmail_service()
+        state = StateManager()
+
+        result = service.users().messages().list(
+            userId='me', q='in:inbox newer_than:1d', maxResults=30
+        ).execute()
+        messages = result.get('messages', [])
+        if not messages:
+            logger.info("Stale email recovery: no recent inbox messages")
+            return
+
+        recovered = 0
+        for msg_ref in messages:
+            msg_id = msg_ref['id']
+            if state.is_email_processed(msg_id) and _should_reprocess_stale(state, msg_id):
+                logger.warning(f"Stale email recovery: re-processing {msg_id}")
+                state.unmark_email_processed(msg_id)
+                _process_single_message(service, state, msg_id)
+                recovered += 1
+
+        if recovered:
+            logger.info(f"Stale email recovery: re-processed {recovered} email(s)")
+        else:
+            logger.info("Stale email recovery: no stale emails found")
+    except Exception as e:
+        logger.error(f"Stale email recovery failed: {e}", exc_info=True)
 
 
 def poll_gmail():
@@ -674,10 +753,19 @@ def process_history_notification(new_history_id):
         except Exception as e:
             logger.warning("Label initialisation skipped in history notification: %s", e)
 
-        for record in history_resp.get('history', []):
+        history_records = history_resp.get('history', [])
+        msg_ids_found = []
+        for record in history_records:
             for msg_added in record.get('messagesAdded', []):
-                msg_id = msg_added['message']['id']
-                _process_single_message(service, state, msg_id)
+                msg_ids_found.append(msg_added['message']['id'])
+
+        logger.info(
+            f"History fetch: startHistoryId={last_id} → newHistoryId={new_history_id}, "
+            f"records={len(history_records)}, messages={len(msg_ids_found)}"
+        )
+
+        for mid in msg_ids_found:
+            _process_single_message(service, state, mid)
 
         # Also watch SENT label so we can auto-confirm when the owner sends a draft reply
         try:

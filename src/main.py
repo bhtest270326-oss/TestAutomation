@@ -5,7 +5,7 @@ import threading
 import logging
 from pythonjsonlogger import jsonlogger
 from webhook_server import create_app
-from gmail_poller import poll_gmail, register_gmail_watch
+from gmail_poller import poll_gmail, register_gmail_watch, recover_stale_emails
 from twilio_handler import poll_sms_replies
 from scheduler import run_scheduled_tasks
 
@@ -70,6 +70,13 @@ def _background_loop():
     - When Pub/Sub is enabled: only runs scheduled tasks + renews the Gmail watch.
     - When Pub/Sub is disabled: also polls Gmail and Twilio every 60 s (legacy mode).
     """
+    # One-time startup: recover any emails that were marked processed
+    # by previous buggy code but never actually got a response sent.
+    try:
+        recover_stale_emails()
+    except Exception as e:
+        logger.error(f"Stale email recovery error on startup: {e}", exc_info=True)
+
     last_watch_renewal = 0
 
     while True:

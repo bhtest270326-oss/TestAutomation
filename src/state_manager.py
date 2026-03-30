@@ -982,6 +982,11 @@ class StateManager:
                 "INSERT OR IGNORE INTO processed_emails(msg_id) VALUES (?)", (msg_id,)
             )
 
+    def unmark_email_processed(self, msg_id):
+        """Remove a message from the processed_emails table so it can be re-processed."""
+        with self._conn() as conn:
+            conn.execute("DELETE FROM processed_emails WHERE msg_id=?", (msg_id,))
+
     # ------------------------------------------------------------------
     # Email processing attempt tracking (retry safety net)
     # ------------------------------------------------------------------
