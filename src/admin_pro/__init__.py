@@ -250,9 +250,10 @@ def require_auth(f):
         # Send WWW-Authenticate on browser page navigations (so login dialog appears)
         # but NOT on API/fetch calls (where it causes browser PIN/credential spam)
         if admin_password:
+            accept_header = request.headers.get('Accept', '')
             is_api_call = (
                 request.path.startswith('/v2/api/')
-                or 'application/json' in (request.accept_mimetypes or '')
+                or (accept_header.startswith('application/json') and 'text/html' not in accept_header)
                 or request.headers.get('X-Requested-With') == 'XMLHttpRequest'
             )
             if not is_api_call:
