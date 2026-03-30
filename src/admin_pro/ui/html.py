@@ -540,8 +540,11 @@ HTML_SECTIONS = """
   <div class="ap-tab-content active" id="comms-gmail" role="tabpanel" aria-label="Gmail inbox">
     <div class="ap-card">
       <div class="ap-card-header">
-        <span class="ap-card-title">Inbox Queue</span>
-        <button class="ap-btn ap-btn-ghost ap-btn-sm" onclick="loadGmailQueue()">↻ Refresh</button>
+        <span class="ap-card-title">Recent Emails</span>
+        <div style="display:flex;gap:8px">
+          <button class="ap-btn ap-btn-ghost ap-btn-sm" onclick="loadGmailQueue()">↻ Refresh</button>
+          <button class="ap-btn ap-btn-primary ap-btn-sm" onclick="processAndRefreshGmail()">Process Inbox</button>
+        </div>
       </div>
       <div class="ap-table-wrap">
         <table class="ap-table" id="gmail-queue-table">

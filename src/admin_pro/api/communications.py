@@ -20,27 +20,59 @@ def register(bp, require_auth):
             limit = 20
         try:
             from google_auth import get_gmail_service
+            from state_manager import StateManager
 
             service = get_gmail_service()
+            state = StateManager()
+
+            # Show all recent emails, not just INBOX — so processed emails
+            # are still visible with their classification label
             result = (
                 service.users()
                 .messages()
-                .list(userId="me", maxResults=limit, labelIds=["INBOX"])
+                .list(userId="me", maxResults=limit, q="newer_than:7d")
                 .execute()
             )
             raw_messages = result.get("messages", [])
 
+            # Batch-fetch message metadata for speed
             messages = []
             for msg_stub in raw_messages:
                 msg_id = msg_stub["id"]
-                msg = (
-                    service.users()
-                    .messages()
-                    .get(userId="me", id=msg_id, format="metadata",
-                         metadataHeaders=["Subject", "From", "Date"])
-                    .execute()
-                )
+                try:
+                    msg = (
+                        service.users()
+                        .messages()
+                        .get(userId="me", id=msg_id, format="metadata",
+                             metadataHeaders=["Subject", "From", "Date"])
+                        .execute()
+                    )
+                except Exception:
+                    continue
                 headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
+                label_ids = msg.get("labelIds", [])
+
+                # Determine classification from labels
+                classification = "inbox"
+                if "SENT" in label_ids:
+                    classification = "sent"
+                elif state.is_email_processed(msg_id):
+                    classification = "processed"
+
+                # Check for custom booking labels
+                for lbl in label_ids:
+                    lbl_lower = lbl.lower()
+                    if "pending" in lbl_lower:
+                        classification = "pending reply"
+                    elif "awaiting" in lbl_lower:
+                        classification = "awaiting confirmation"
+                    elif "confirmed" in lbl_lower and "un" not in lbl_lower:
+                        classification = "confirmed"
+                    elif "declined" in lbl_lower:
+                        classification = "declined"
+                    elif "assistance" in lbl_lower:
+                        classification = "needs review"
+
                 messages.append(
                     {
                         "id": msg_id,
@@ -48,6 +80,8 @@ def register(bp, require_auth):
                         "from": headers.get("From", ""),
                         "date": headers.get("Date", ""),
                         "snippet": msg.get("snippet", ""),
+                        "classification": classification,
+                        "in_inbox": "INBOX" in label_ids,
                     }
                 )
 

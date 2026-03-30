@@ -51,6 +51,17 @@ async function initComms() {
   await loadGmailQueue();
 }
 
+async function processAndRefreshGmail() {
+  try {
+    showToast('Processing inbox…', 'info');
+    await apiFetch('/v2/api/gmail/poll', { method: 'POST' });
+    showToast('Inbox processed', 'success');
+    await loadGmailQueue();
+  } catch (err) {
+    showToast('Process failed: ' + err.message, 'error');
+  }
+}
+
 // ─── Gmail Queue ──────────────────────────────────────────────────────────────
 
 async function loadGmailQueue() {
@@ -72,17 +83,28 @@ async function loadGmailQueue() {
       tbody.innerHTML = '<tr><td colspan="5" class="ap-table-empty">Inbox is empty</td></tr>';
       return;
     }
-    tbody.innerHTML = msgs.map(m => `
-      <tr>
+    tbody.innerHTML = msgs.map(m => {
+      var cls = (m.classification || 'inbox').toLowerCase();
+      var badgeClass = cls === 'inbox' ? 'ap-badge-blue'
+        : cls === 'sent' ? 'ap-badge-purple'
+        : cls === 'pending reply' ? 'ap-badge-amber'
+        : cls === 'awaiting confirmation' ? 'ap-badge-amber'
+        : cls === 'confirmed' ? 'ap-badge-green'
+        : cls === 'declined' ? 'ap-badge-red'
+        : cls === 'needs review' ? 'ap-badge-blue'
+        : cls === 'processed' ? 'ap-badge-muted'
+        : 'ap-badge-blue';
+      return `
+      <tr${cls === 'sent' ? ' style="opacity:0.6"' : ''}>
         <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(m.from || '?')}</td>
         <td>${escapeHtml(m.subject || '(no subject)')}</td>
         <td class="ap-text-muted" style="white-space:nowrap">${escapeHtml(m.date || '')}</td>
-        <td><span class="ap-badge ap-badge-blue">${escapeHtml(m.classification || 'inbox')}</span></td>
+        <td><span class="ap-badge ${badgeClass}">${escapeHtml(cls)}</span></td>
         <td>
           <button class="ap-btn ap-btn-ghost ap-btn-xs" data-action="gmail-preview" data-subject="${escapeHtml(m.subject || '')}" data-snippet="${escapeHtml(m.snippet || '')}">Preview</button>
         </td>
-      </tr>
-    `).join('');
+      </tr>`;
+    }).join('');
   } catch (e) {
     tbody.innerHTML = `<tr><td colspan="5" class="ap-table-empty ap-text-danger">Failed to load Gmail: ${escapeHtml(e.message)}</td></tr>`;
   }
