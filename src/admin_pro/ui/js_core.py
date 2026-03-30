@@ -108,6 +108,9 @@ function showSection(name) {
 
 // ── API Client ───────────────────────────────────────────────
 async function apiFetch(path, options = {}) {
+  if (window._apAuthExpired) {
+    throw new Error('Session expired — please refresh the page');
+  }
   // Prepend /v2 if not already present
   if (!path.startsWith('/v2')) {
     path = '/v2' + (path.startsWith('/') ? path : '/' + path);
@@ -135,6 +138,7 @@ async function apiFetch(path, options = {}) {
   }
 
   if (response.status === 401) {
+    window._apAuthExpired = true;
     showToast('Session expired. Please log in again.', 'error', 6000);
     throw new Error('Unauthorized');
   }

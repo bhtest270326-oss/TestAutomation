@@ -222,6 +222,7 @@ def require_auth(f):
         # Check session cookie first (set after successful login on the SPA page)
         sid = request.cookies.get('ap_session', '')
         if sid and _check_session(sid):
+            _SESSIONS[sid] = time.time() + _SESSION_TTL  # renew on use
             return f(*args, **kwargs)
 
         # Fall back to direct credentials (Basic Auth or ?token=)
@@ -246,8 +247,7 @@ def require_auth(f):
             jsonify({'ok': False, 'error': 'Unauthorized'}),
             401
         )
-        if admin_password:
-            response.headers['WWW-Authenticate'] = 'Basic realm="Admin"'
+        # Do NOT set WWW-Authenticate header — it causes browser PIN/credential prompts
         return response
 
     return decorated
