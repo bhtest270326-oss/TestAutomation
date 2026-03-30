@@ -76,6 +76,23 @@ HTML_SIDEBAR = """
       <span>Waitlist</span>
     </button>
 
+    <button class="ap-nav-item" data-section="quotes" onclick="showSection('quotes')">
+      <svg class="ap-nav-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        <polyline points="14,2 14,8 20,8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        <line x1="12" y1="18" x2="12" y2="12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        <line x1="9" y1="15" x2="15" y2="15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+      </svg>
+      <span>Quotes</span>
+    </button>
+
+    <button class="ap-nav-item" data-section="manual-booking" onclick="showSection('manual-booking')">
+      <svg class="ap-nav-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <span>New Booking</span>
+    </button>
+
     <div class="ap-nav-section-label" id="nav-label-analytics">ANALYTICS</div>
 
     <button class="ap-nav-item" data-section="analytics" onclick="showSection('analytics')" aria-label="Analytics">
@@ -965,6 +982,187 @@ HTML_SECTIONS = """
     </div>
   </div>
 
+</section>
+
+<!-- ═══════════════════════════════════════════════ QUOTES ══ -->
+<section class="ap-section" id="section-quotes" style="display:none;">
+  <div class="ap-card" style="margin-bottom:20px;">
+    <div class="ap-card-header">
+      <span class="ap-card-title">Generate Quote</span>
+    </div>
+    <form id="quote-form" onsubmit="generateStandaloneQuote(event)">
+      <div class="ap-grid-2" style="gap:16px;padding:16px;">
+        <div class="ap-form-group">
+          <label class="ap-label" for="quote-service-type">Service Type</label>
+          <select class="ap-select" id="quote-service-type" required>
+            <option value="">Select service...</option>
+            <option value="rim_repair">Standard Rim Repair</option>
+            <option value="diamond_cut">Diamond Cut</option>
+            <option value="custom_paint">Custom Paint</option>
+            <option value="gutter_rash">Gutter Rash</option>
+            <option value="crack_repair">Crack Repair</option>
+          </select>
+        </div>
+        <div class="ap-form-group">
+          <label class="ap-label" for="quote-rim-count">Rim Count</label>
+          <input class="ap-input" id="quote-rim-count" type="number" min="1" max="10" value="1">
+        </div>
+        <div class="ap-form-group">
+          <label class="ap-label" for="quote-rim-size">Rim Size (inches)</label>
+          <input class="ap-input" id="quote-rim-size" type="number" min="13" max="26" step="0.5" placeholder="e.g. 18">
+        </div>
+        <div class="ap-form-group">
+          <label class="ap-label" for="quote-damage-desc">Damage Description</label>
+          <input class="ap-input" id="quote-damage-desc" type="text" placeholder="Describe the damage...">
+        </div>
+      </div>
+      <div style="padding:0 16px 16px;">
+        <button class="ap-btn ap-btn-primary" type="submit">Generate Quote</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="ap-card">
+    <div class="ap-card-header">
+      <span class="ap-card-title">Recent Quotes</span>
+      <button class="ap-btn ap-btn-ghost ap-btn-sm" onclick="loadQuotesList()">Refresh</button>
+    </div>
+    <div class="ap-table-wrap">
+      <table class="ap-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Booking</th>
+            <th>Service</th>
+            <th>Price Range</th>
+            <th>Confidence</th>
+            <th>Date</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="quotes-tbody">
+          <tr><td colspan="7" class="ap-table-empty">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════ MANUAL BOOKING ══ -->
+<section class="ap-section" id="section-manual-booking" style="display:none;">
+  <form id="manual-booking-form" onsubmit="return false;">
+
+    <!-- Customer Details -->
+    <div class="ap-card" style="margin-bottom:20px;">
+      <div class="ap-card-header">
+        <span class="ap-card-title">Customer Details</span>
+      </div>
+      <div class="ap-grid-2" style="padding:16px;gap:16px;">
+        <div>
+          <label style="display:block;font-size:13px;font-weight:500;margin-bottom:4px;">Customer Name <span style="color:var(--ap-danger)">*</span></label>
+          <input type="text" class="ap-input" id="mb-customer-name" required placeholder="Full name">
+        </div>
+        <div>
+          <label style="display:block;font-size:13px;font-weight:500;margin-bottom:4px;">Phone <span style="color:var(--ap-danger)">*</span></label>
+          <input type="tel" class="ap-input" id="mb-phone" required placeholder="04xx xxx xxx">
+        </div>
+        <div>
+          <label style="display:block;font-size:13px;font-weight:500;margin-bottom:4px;">Email</label>
+          <input type="email" class="ap-input" id="mb-email" placeholder="customer@example.com">
+        </div>
+        <div>
+          <label style="display:block;font-size:13px;font-weight:500;margin-bottom:4px;">Address</label>
+          <input type="text" class="ap-input" id="mb-address" placeholder="Street address">
+        </div>
+        <div>
+          <label style="display:block;font-size:13px;font-weight:500;margin-bottom:4px;">Suburb</label>
+          <input type="text" class="ap-input" id="mb-suburb" placeholder="Suburb">
+        </div>
+        <div>
+          <label style="display:block;font-size:13px;font-weight:500;margin-bottom:4px;">Postcode</label>
+          <input type="text" class="ap-input" id="mb-postcode" placeholder="Postcode">
+        </div>
+      </div>
+    </div>
+
+    <!-- Vehicle Details -->
+    <div class="ap-card" style="margin-bottom:20px;">
+      <div class="ap-card-header">
+        <span class="ap-card-title">Vehicle Details</span>
+      </div>
+      <div class="ap-grid-2" style="padding:16px;gap:16px;">
+        <div>
+          <label style="display:block;font-size:13px;font-weight:500;margin-bottom:4px;">Vehicle Make</label>
+          <input type="text" class="ap-input" id="mb-vehicle-make" placeholder="e.g. Toyota">
+        </div>
+        <div>
+          <label style="display:block;font-size:13px;font-weight:500;margin-bottom:4px;">Vehicle Model</label>
+          <input type="text" class="ap-input" id="mb-vehicle-model" placeholder="e.g. Camry">
+        </div>
+        <div>
+          <label style="display:block;font-size:13px;font-weight:500;margin-bottom:4px;">Vehicle Colour</label>
+          <input type="text" class="ap-input" id="mb-vehicle-colour" placeholder="e.g. Silver">
+        </div>
+        <div>
+          <label style="display:block;font-size:13px;font-weight:500;margin-bottom:4px;">Vehicle Year</label>
+          <input type="text" class="ap-input" id="mb-vehicle-year" placeholder="e.g. 2022">
+        </div>
+      </div>
+    </div>
+
+    <!-- Service Details -->
+    <div class="ap-card" style="margin-bottom:20px;">
+      <div class="ap-card-header">
+        <span class="ap-card-title">Service Details</span>
+      </div>
+      <div class="ap-grid-2" style="padding:16px;gap:16px;">
+        <div>
+          <label style="display:block;font-size:13px;font-weight:500;margin-bottom:4px;">Service Type</label>
+          <select class="ap-select" id="mb-service-type">
+            <option value="rim_repair">Standard Rim Repair</option>
+            <option value="diamond_cut">Diamond Cut</option>
+            <option value="custom_paint">Custom Paint</option>
+            <option value="gutter_rash">Gutter Rash</option>
+            <option value="crack_repair">Crack Repair</option>
+          </select>
+        </div>
+        <div>
+          <label style="display:block;font-size:13px;font-weight:500;margin-bottom:4px;">Number of Rims</label>
+          <select class="ap-select" id="mb-num-rims">
+            <option value="1" selected>1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+          </select>
+        </div>
+        <div>
+          <label style="display:block;font-size:13px;font-weight:500;margin-bottom:4px;">Preferred Date</label>
+          <input type="date" class="ap-input" id="mb-preferred-date">
+        </div>
+        <div>
+          <label style="display:block;font-size:13px;font-weight:500;margin-bottom:4px;">Preferred Time</label>
+          <input type="time" class="ap-input" id="mb-preferred-time">
+        </div>
+        <div style="grid-column:1/-1;">
+          <label style="display:block;font-size:13px;font-weight:500;margin-bottom:4px;">Notes</label>
+          <textarea class="ap-input" id="mb-notes" rows="3" placeholder="Additional notes about the booking..."></textarea>
+        </div>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="ap-card" style="margin-bottom:20px;">
+      <div style="padding:16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <button type="button" class="ap-btn ap-btn-ghost" onclick="createManualBooking(false)">Create as Pending</button>
+        <button type="button" class="ap-btn ap-btn-primary" onclick="createManualBooking(true)">Create &amp; Confirm</button>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-left:auto;cursor:pointer;">
+          <input type="checkbox" id="mb-notify-customer" checked>
+          <span>Send confirmation SMS/email to customer</span>
+        </label>
+      </div>
+    </div>
+
+  </form>
 </section>
 
 <!-- ═══════════════════════════════════════════════ ACTIVITY ══ -->

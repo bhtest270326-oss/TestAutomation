@@ -540,9 +540,13 @@ def register(bp, require_auth):
     @require_auth
     def edit_booking(booking_id):
         try:
-            body = request.get_json(silent=True) or {}
+            body = request.get_json(silent=True)
+            if body is None:
+                logger.warning("edit_booking %s: no JSON body received (Content-Type: %s)",
+                               booking_id, request.content_type)
+                return jsonify({'ok': False, 'error': 'Request body is required (JSON expected)'}), 400
             if not body:
-                return jsonify({'ok': False, 'error': 'Request body is required'}), 400
+                return jsonify({'ok': False, 'error': 'Request body is empty'}), 400
 
             state = StateManager()
 

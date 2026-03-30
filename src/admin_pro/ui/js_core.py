@@ -31,6 +31,8 @@ const SECTION_META = {
   activity:  { title: 'Activity Feed',   subtitle: 'Audit log and recent events' },
   waitlist:  { title: 'Waitlist',        subtitle: 'Manage waitlisted customers' },
   'market-pricing': { title: 'Market Pricing', subtitle: 'Competitor prices and market position' },
+  quotes: { title: 'Quotes', subtitle: 'Generate and manage price quotes' },
+  'manual-booking': { title: 'New Booking', subtitle: 'Create a booking manually' },
 };
 
 // ── Section Init Map ─────────────────────────────────────────
@@ -45,6 +47,8 @@ const SECTION_INIT = {
   activity:  () => typeof initActivity   === 'function' && initActivity(),
   waitlist:  () => typeof initWaitlist   === 'function' && initWaitlist(),
   'market-pricing': () => typeof initMarketPricing === 'function' && initMarketPricing(),
+  quotes: () => typeof initQuotes === 'function' && initQuotes(),
+  'manual-booking': () => typeof initManualBooking === 'function' && initManualBooking(),
 };
 
 // ── Section Navigation ───────────────────────────────────────

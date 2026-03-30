@@ -14,6 +14,38 @@ def register(bp, require_auth):
     """Register quote and damage scoring API routes on *bp*."""
 
     # ------------------------------------------------------------------
+    # GET /api/quotes/list — list all quotes
+    # ------------------------------------------------------------------
+    @bp.route('/api/quotes/list', methods=['GET'])
+    @require_auth
+    def list_quotes():
+        try:
+            from quoting_engine import _ensure_quotes_table
+            from state_manager import _get_conn
+            _ensure_quotes_table()
+            with _get_conn() as conn:
+                rows = conn.execute(
+                    "SELECT * FROM quotes ORDER BY created_at DESC LIMIT 100"
+                ).fetchall()
+            quotes = []
+            for row in rows:
+                d = dict(row)
+                # Parse JSON fields
+                try:
+                    d['breakdown'] = json.loads(d.pop('breakdown_json', '[]'))
+                except Exception:
+                    d['breakdown'] = []
+                try:
+                    d['adjustments'] = json.loads(d.pop('adjustments_json', '[]'))
+                except Exception:
+                    d['adjustments'] = []
+                quotes.append(d)
+            return jsonify({'ok': True, 'data': quotes})
+        except Exception:
+            logger.exception("Error listing quotes")
+            return jsonify({'ok': False, 'error': 'Internal server error'}), 500
+
+    # ------------------------------------------------------------------
     # POST /api/quotes/generate — generate a quote from booking details
     # ------------------------------------------------------------------
     @bp.route('/api/quotes/generate', methods=['POST'])
