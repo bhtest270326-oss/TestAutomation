@@ -447,6 +447,13 @@ def _ensure_schema(conn):
         );
         CREATE INDEX IF NOT EXISTS idx_comp_prices_svc ON competitor_prices(service_type);
         CREATE INDEX IF NOT EXISTS idx_comp_prices_comp ON competitor_prices(competitor_id);
+
+        CREATE TABLE IF NOT EXISTS email_processing_attempts (
+            msg_id TEXT PRIMARY KEY,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            last_attempt_at TEXT
+        );
     """
     conn.executescript(schema_sql)
     conn.commit()
@@ -974,6 +981,30 @@ class StateManager:
             conn.execute(
                 "INSERT OR IGNORE INTO processed_emails(msg_id) VALUES (?)", (msg_id,)
             )
+
+    # ------------------------------------------------------------------
+    # Email processing attempt tracking (retry safety net)
+    # ------------------------------------------------------------------
+
+    def get_processing_attempts(self, msg_id):
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT attempts FROM email_processing_attempts WHERE msg_id=?",
+                (msg_id,)
+            ).fetchone()
+        return row['attempts'] if row else 0
+
+    def increment_processing_attempts(self, msg_id, error_msg=None):
+        with self._conn() as conn:
+            conn.execute("""
+                INSERT INTO email_processing_attempts (msg_id, attempts, last_error, last_attempt_at)
+                VALUES (?, 1, ?, ?)
+                ON CONFLICT(msg_id) DO UPDATE SET
+                    attempts = attempts + 1,
+                    last_error = excluded.last_error,
+                    last_attempt_at = excluded.last_attempt_at
+            """, (msg_id, error_msg, datetime.now(timezone.utc).isoformat()))
+        return self.get_processing_attempts(msg_id)
 
     def is_sms_processed(self, sms_sid):
         with self._conn() as conn:

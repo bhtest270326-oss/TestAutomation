@@ -11,13 +11,35 @@ from googleapiclient.errors import HttpError
 from ai_parser import extract_booking_details, merge_booking_data, is_booking_request
 from state_manager import StateManager
 from twilio_handler import send_owner_confirmation_request
-from label_manager import initialise_labels, label_pending_reply, label_awaiting_confirmation, label_processed
+from label_manager import initialise_labels, label_pending_reply, label_awaiting_confirmation, label_processed, label_assistance_required
 from email.mime.text import MIMEText
 
 from feature_flags import get_flag
 from trace_context import trace_span
 
 logger = logging.getLogger(__name__)
+
+try:
+    from label_manager import clear_label_cache
+except ImportError:
+    def clear_label_cache():
+        """Stub — label_manager.clear_label_cache not yet available."""
+        pass
+
+
+def _apply_label_with_retry(label_fn, service, msg_id):
+    """Apply a Gmail label with one retry on failure (clears cache first)."""
+    try:
+        label_fn(service, msg_id)
+    except Exception:
+        try:
+            clear_label_cache()
+        except Exception:
+            pass
+        try:
+            label_fn(service, msg_id)
+        except Exception as e2:
+            logger.error("Label retry failed for %s: %s", msg_id, e2)
 
 
 # ---------------------------------------------------------------------------
@@ -306,15 +328,28 @@ def _process_single_message_inner(service, state, msg_id):
 
     logger.info(f"Processing email from {customer_email}: {subject} (thread: {thread_id})")
 
+    # Retry safety net — bail to DLQ after too many failed attempts
+    attempts = state.get_processing_attempts(msg_id)
+    if attempts >= 3:
+        logger.error("Message %s has failed %d times — sending to DLQ", msg_id, attempts)
+        state.add_to_dlq(msg_id, thread_id or '', customer_email or '', body[:2000] if body else '',
+                         'max_retries', f'Failed processing {attempts} times')
+        state.mark_email_processed(msg_id)
+        return
+
     existing_pending = state.get_pending_booking_by_thread(thread_id) if thread_id else None
 
     if existing_pending:
         # Reply to an ongoing clarification — always process, no need to re-classify
-        handle_clarification_reply(
-            service, state, msg_id, thread_id,
-            existing_pending, body, subject, customer_email,
-            message_id_header=message_id_header
-        )
+        try:
+            handle_clarification_reply(
+                service, state, msg_id, thread_id,
+                existing_pending, body, subject, customer_email,
+                message_id_header=message_id_header
+            )
+        except Exception as e:
+            state.increment_processing_attempts(msg_id, str(e))
+            logger.error(f"handle_clarification_reply failed for {msg_id} from {customer_email}: {e}", exc_info=True)
     elif thread_id and state.thread_has_active_booking(thread_id):
         # Reply on a thread that already has an active/confirmed booking —
         # check for cancellation or reschedule intent
@@ -341,9 +376,8 @@ def _process_single_message_inner(service, state, msg_id):
                 images=email_images if email_images else None,
             )
         except Exception as e:
+            state.increment_processing_attempts(msg_id, str(e))
             logger.error(f"handle_new_enquiry failed for {msg_id} from {customer_email}: {e}", exc_info=True)
-
-    state.mark_email_processed(msg_id)
 
 
 def _handle_active_booking_reply(state, thread_id, body_text, customer_email, msg_id):
@@ -418,6 +452,8 @@ def _handle_active_booking_reply(state, thread_id, body_text, customer_email, ms
 
         else:
             logger.info(f"Thread {thread_id} has active booking {booking_id} — reply has no actionable intent, skipping")
+
+        state.mark_email_processed(msg_id)
 
     except Exception as e:
         logger.error(f"Error handling active booking reply on thread {thread_id}: {e}", exc_info=True)
@@ -951,18 +987,12 @@ def handle_availability_inquiry(msg_id, thread_id, subject, body, customer_email
     except Exception as e:
         logger.error(f"Could not create pending clarification for {customer_email}: {e}")
 
-    # Step 2: send the availability email
-    try:
-        send_customer_email(service, customer_email, reply_subject, inner_html, thread_id=thread_id)
-        logger.info(f"Availability response sent to {customer_email} ({service_description}, {duration} min)")
-    except Exception as e:
-        logger.error(f"Could not send availability response to {customer_email}: {e}")
+    # Step 2: send the availability email (let failure propagate so we retry)
+    send_customer_email(service, customer_email, reply_subject, inner_html, thread_id=thread_id)
+    logger.info(f"Availability response sent to {customer_email} ({service_description}, {duration} min)")
 
-    # Step 3: apply Gmail label regardless of email send outcome
-    try:
-        label_processed(service, msg_id)
-    except Exception as e:
-        logger.warning(f"Could not label availability reply: {e}")
+    # Step 3: apply Gmail label after successful send
+    _apply_label_with_retry(label_processed, service, msg_id)
 
     state.mark_email_processed(msg_id)
 
@@ -1074,26 +1104,21 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
                 logger.error(f"Could not log early booking events: {e}")
 
         if get_flag('flag_auto_email_replies'):
-            try:
-                send_clarification_email(service, customer_email, subject, missing_fields,
-                                          thread_id=thread_id, message_id_header=message_id_header,
-                                          booking_data=booking_data)
-                if early_id:
-                    try:
-                        state.log_booking_event(early_id, 'email_sent', actor='ai',
-                            details={'to': customer_email, 'type': 'clarification',
-                                     'missing_fields': missing_fields})
-                    except Exception:
-                        pass
-            except Exception as e:
-                logger.error(f"Failed to send clarification email to {customer_email}: {e}")
+            send_clarification_email(service, customer_email, subject, missing_fields,
+                                      thread_id=thread_id, message_id_header=message_id_header,
+                                      booking_data=booking_data)
+            if early_id:
+                try:
+                    state.log_booking_event(early_id, 'email_sent', actor='ai',
+                        details={'to': customer_email, 'type': 'clarification',
+                                 'missing_fields': missing_fields})
+                except Exception:
+                    pass
         else:
             logger.info(f"Auto email replies disabled — clarification not sent to {customer_email}")
-        try:
-            label_pending_reply(service, msg_id)
-        except Exception as e:
-            logger.warning("Could not apply pending-reply label for %s: %s", msg_id, e)
+        _apply_label_with_retry(label_pending_reply, service, msg_id)
         logger.info(f"Clarification sent to {customer_email}, thread {thread_id}")
+        state.mark_email_processed(msg_id)
     else:
         # --- Duplicate / Repeat Customer Detection ---
         try:
@@ -1147,10 +1172,7 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
                 msg_id=msg_id,
                 missing_fields=['your preferred available day']
             )
-            try:
-                label_pending_reply(service, msg_id)
-            except Exception as e:
-                logger.warning("Could not apply pending-reply label for %s: %s", msg_id, e)
+            _apply_label_with_retry(label_pending_reply, service, msg_id)
             state.mark_email_processed(msg_id)
             return
 
@@ -1210,20 +1232,15 @@ def handle_new_enquiry(service, state, msg_id, thread_id, body, subject, custome
         except Exception as e:
             logger.error(f"Could not log booking creation event: {e}")
 
-        try:
-            send_owner_confirmation_request(pending_id, booking_data)
-        except Exception as e:
-            logger.error(f"Failed to send owner confirmation for {pending_id}: {e}")
+        send_owner_confirmation_request(pending_id, booking_data)
         try:
             state.log_booking_event(pending_id, 'sms_sent', actor='system',
                 details={'to': 'owner', 'type': 'confirmation_request'})
         except Exception:
             pass
-        try:
-            label_awaiting_confirmation(service, msg_id)
-        except Exception as e:
-            logger.warning("Could not apply awaiting-confirmation label for %s: %s", msg_id, e)
+        _apply_label_with_retry(label_awaiting_confirmation, service, msg_id)
         logger.info(f"Owner confirmation sent for booking {pending_id}")
+        state.mark_email_processed(msg_id)
 
 
 def handle_clarification_reply(service, state, msg_id, thread_id, existing_pending, body, subject, customer_email, message_id_header=None):
@@ -1279,10 +1296,7 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
                 logger.info(f"Auto email replies disabled — FAQ reply not sent to {customer_email}")
         except Exception as _fe:
             logger.error(f"FAQ response error for {customer_email}: {_fe}")
-        try:
-            label_pending_reply(service, msg_id)
-        except Exception as e:
-            logger.warning("Could not apply pending-reply label for FAQ reply %s: %s", msg_id, e)
+        _apply_label_with_retry(label_pending_reply, service, msg_id)
         state.mark_email_processed(msg_id)
         return
 
@@ -1300,11 +1314,7 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
                 logger.warning(f"Draft creation returned None for {customer_email}")
         except Exception as _de:
             logger.error(f"Off-scope draft creation error for {customer_email}: {_de}")
-        try:
-            from label_manager import label_assistance_required
-            label_assistance_required(service, msg_id)
-        except Exception as _le:
-            logger.warning(f"Could not apply Assistance Required label: {_le}")
+        _apply_label_with_retry(label_assistance_required, service, msg_id)
         try:
             state.log_booking_event(
                 existing_pending['id'], 'off_scope_question', actor='customer',
@@ -1335,11 +1345,7 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
                 logger.warning(f"Mixed-intent draft creation returned None for {customer_email}")
         except Exception as _de:
             logger.error(f"Mixed-intent draft creation error for {customer_email}: {_de}")
-        try:
-            from label_manager import label_assistance_required
-            label_assistance_required(service, msg_id)
-        except Exception as _le:
-            logger.warning(f"Could not apply Assistance Required label for mixed intent: {_le}")
+        _apply_label_with_retry(label_assistance_required, service, msg_id)
         try:
             state.log_booking_event(
                 existing_pending['id'], 'mixed_intent_question', actor='customer',
@@ -1429,10 +1435,7 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
                     f"to {customer_email} in clarification loop"
                 )
                 state.update_clarification_booking_data(existing_pending['id'], merged_data, still_missing)
-                try:
-                    label_pending_reply(service, msg_id)
-                except Exception:
-                    pass
+                _apply_label_with_retry(label_pending_reply, service, msg_id)
                 state.mark_email_processed(msg_id)
                 return
         except Exception as _e:
@@ -1483,11 +1486,9 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
         if _linked_bid:
             merged_data['missing_fields'] = still_missing
             state.update_pending_booking_data(_linked_bid, merged_data)
-        try:
-            label_pending_reply(service, msg_id)
-        except Exception as e:
-            logger.warning("Could not apply pending-reply label for %s: %s", msg_id, e)
+        _apply_label_with_retry(label_pending_reply, service, msg_id)
         logger.info(f"Still missing fields for thread {thread_id}: {still_missing}")
+        state.mark_email_processed(msg_id)
     else:
         # All data collected — check the requested date is actually available before booking
         preferred_date = merged_data.get('preferred_date')
@@ -1502,10 +1503,7 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
             state.update_clarification_booking_data(
                 existing_pending['id'], merged_data, ['your preferred available day']
             )
-            try:
-                label_pending_reply(service, msg_id)
-            except Exception as e:
-                logger.warning("Could not apply pending-reply label for %s: %s", msg_id, e)
+            _apply_label_with_retry(label_pending_reply, service, msg_id)
             state.mark_email_processed(msg_id)
             return
 
@@ -1541,10 +1539,7 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
                 details={'to': 'owner', 'type': 'confirmation_request'})
         except Exception:
             pass
-        try:
-            label_awaiting_confirmation(service, msg_id)
-        except Exception as e:
-            logger.warning("Could not apply awaiting-confirmation label for %s: %s", msg_id, e)
+        _apply_label_with_retry(label_awaiting_confirmation, service, msg_id)
         logger.info(f"Clarification complete, owner confirmation sent for booking {pending_id}")
 
         # Mixed-intent: update draft with assigned slot and store metadata so the booking
@@ -1571,6 +1566,8 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
                 )
             except Exception as _dre:
                 logger.error(f"Could not refresh mixed-intent draft for booking {pending_id}: {_dre}")
+
+        state.mark_email_processed(msg_id)
 
 
 def send_clarification_email(service, to_email, original_subject, missing_fields,
