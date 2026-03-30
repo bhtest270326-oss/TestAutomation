@@ -43,6 +43,7 @@ async function openRouteMap(dateStr) {
     modal = document.getElementById('route-map-modal');
   }
   modal.style.display = 'flex';
+  modal.classList.add('open');
   document.body.style.overflow = 'hidden';
 
   // Show loading state
@@ -112,6 +113,7 @@ function _createRouteModal() {
 function closeRouteMap() {
   var modal = document.getElementById('route-map-modal');
   if (modal) {
+    modal.classList.remove('open');
     modal.style.display = 'none';
     document.body.style.overflow = '';
   }
