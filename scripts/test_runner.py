@@ -513,7 +513,8 @@ SCENARIOS: List[Scenario] = [
         missing_fields=[],
         expect_booking_created=False,
         expect_processed=True,
-        # We pre-mark the msg as processed before running; handled in runner
+        expect_dlq_entry=True,  # DLQ entry pre-populated so stale recovery doesn't reprocess
+        # We pre-mark the msg as processed + add DLQ entry before running; handled in runner
     ),
 
     # ── Availability inquiry ──────────────────────────────────────────────────
@@ -866,8 +867,12 @@ def _setup_state(state, scenario: Scenario) -> None:
         _insert_service_history(state, scenario.customer_email)
 
     # Pre-mark as processed (scenario: already_processed)
+    # Also add a DLQ entry so _should_reprocess_stale sees it as legitimately processed
     if scenario.id == "already_processed":
         state.mark_email_processed(scenario.msg_id)
+        state.add_to_dlq(scenario.msg_id, scenario.thread_id or '',
+                         scenario.customer_email, scenario.email_body,
+                         'test', 'pre-populated for dedup test')
 
     # Pre-populate email_processing_attempts for retry scenarios
     if scenario.pre_populate_attempts > 0:

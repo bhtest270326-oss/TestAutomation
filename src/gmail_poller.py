@@ -300,7 +300,8 @@ def _process_single_message(service, state, msg_id):
 
 
 def _should_reprocess_stale(state, msg_id):
-    """Return True if a processed email has no associated booking, clarification, or DLQ entry.
+    """Return True if a processed email has no associated booking, clarification, or DLQ entry,
+    OR if it was marked processed but has failed processing attempts (send failure bug).
 
     This catches emails that were marked processed by old buggy code without
     any action being taken. They need to be re-processed.
@@ -308,16 +309,26 @@ def _should_reprocess_stale(state, msg_id):
     try:
         from state_manager import _get_conn
         with _get_conn() as conn:
+            # If the email has failed processing attempts and fewer than 3,
+            # it was likely marked processed despite a send failure (old bug).
+            # Unmark it so the retry mechanism can pick it up.
+            attempt_row = conn.execute(
+                "SELECT attempts FROM email_processing_attempts WHERE msg_id = ? LIMIT 1",
+                (msg_id,)
+            ).fetchone()
+            if attempt_row and attempt_row['attempts'] < 3:
+                return True
+
             # Check if there's a booking with this msg_id
             booking = conn.execute(
-                "SELECT id FROM bookings WHERE msg_id = ? LIMIT 1", (msg_id,)
+                "SELECT id FROM bookings WHERE gmail_msg_id = ? LIMIT 1", (msg_id,)
             ).fetchone()
             if booking:
                 return False
 
             # Check if there's a pending clarification with this msg_id
             clarification = conn.execute(
-                "SELECT id FROM clarifications WHERE msg_id = ? LIMIT 1", (msg_id,)
+                "SELECT id FROM clarifications WHERE gmail_msg_id = ? LIMIT 1", (msg_id,)
             ).fetchone()
             if clarification:
                 return False
@@ -393,8 +404,13 @@ def _process_single_message_inner(service, state, msg_id):
                 message_id_header=message_id_header
             )
         except Exception as e:
-            state.increment_processing_attempts(msg_id, str(e))
-            logger.error(f"handle_clarification_reply failed for {msg_id} from {customer_email}: {e}", exc_info=True)
+            attempts = state.increment_processing_attempts(msg_id, str(e))
+            logger.error(f"handle_clarification_reply failed for {msg_id} from {customer_email} (attempt {attempts}): {e}", exc_info=True)
+            if attempts >= 3:
+                state.add_to_dlq(msg_id, thread_id or '', customer_email, body[:2000],
+                                 'handle_clarification_reply', str(e))
+                state.mark_email_processed(msg_id)
+                logger.warning(f"Message {msg_id} moved to DLQ after {attempts} failed attempts")
     elif thread_id and state.thread_has_active_booking(thread_id):
         # Reply on a thread that already has an active/confirmed booking —
         # check for cancellation or reschedule intent
@@ -413,8 +429,13 @@ def _process_single_message_inner(service, state, msg_id):
                 images=email_images if email_images else None,
             )
         except Exception as e:
-            state.increment_processing_attempts(msg_id, str(e))
-            logger.error(f"handle_new_enquiry failed for {msg_id} from {customer_email}: {e}", exc_info=True)
+            attempts = state.increment_processing_attempts(msg_id, str(e))
+            logger.error(f"handle_new_enquiry failed for {msg_id} from {customer_email} (attempt {attempts}): {e}", exc_info=True)
+            if attempts >= 3:
+                state.add_to_dlq(msg_id, thread_id or '', customer_email, body[:2000],
+                                 'handle_new_enquiry', str(e))
+                state.mark_email_processed(msg_id)
+                logger.warning(f"Message {msg_id} moved to DLQ after {attempts} failed attempts")
 
 
 def _handle_active_booking_reply(state, thread_id, body_text, customer_email, msg_id):
@@ -1317,22 +1338,19 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
         # Customer asked a FAQ-type question (pricing, area, hours, payment, etc.)
         # Auto-answer it and re-ask missing fields, but do NOT consume an attempt.
         logger.info(f"FAQ question detected from {customer_email} on thread {thread_id} — auto-answering")
-        try:
-            faq_html = generate_faq_response(body, first_name, existing_missing, original_data)
-            if get_flag('flag_auto_email_replies'):
-                from email_utils import send_customer_email
-                send_customer_email(service, customer_email, reply_subject, faq_html, thread_id=thread_id)
-                logger.info(f"FAQ auto-reply sent to {customer_email}")
-                if _linked_bid:
-                    try:
-                        state.log_booking_event(_linked_bid, 'email_sent', actor='ai',
-                            details={'to': customer_email, 'type': 'faq_response'})
-                    except Exception:
-                        pass
-            else:
-                logger.info(f"Auto email replies disabled — FAQ reply not sent to {customer_email}")
-        except Exception as _fe:
-            logger.error(f"FAQ response error for {customer_email}: {_fe}")
+        faq_html = generate_faq_response(body, first_name, existing_missing, original_data)
+        if get_flag('flag_auto_email_replies'):
+            from email_utils import send_customer_email
+            send_customer_email(service, customer_email, reply_subject, faq_html, thread_id=thread_id)
+            logger.info(f"FAQ auto-reply sent to {customer_email}")
+            if _linked_bid:
+                try:
+                    state.log_booking_event(_linked_bid, 'email_sent', actor='ai',
+                        details={'to': customer_email, 'type': 'faq_response'})
+                except Exception:
+                    pass
+        else:
+            logger.info(f"Auto email replies disabled — FAQ reply not sent to {customer_email}")
         _apply_label_with_retry(label_pending_reply, service, msg_id)
         state.mark_email_processed(msg_id)
         return
@@ -1341,16 +1359,13 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
         # Customer asked something outside our FAQ scope.
         # Create a draft reply for owner review, label the email blue, do NOT send.
         logger.info(f"Off-scope message from {customer_email} on thread {thread_id} — creating draft for owner review")
-        try:
-            draft_html = draft_off_scope_reply(body, first_name, existing_missing, original_data)
-            from email_utils import create_gmail_draft
-            draft_id = create_gmail_draft(service, customer_email, reply_subject, draft_html, thread_id=thread_id)
-            if draft_id:
-                logger.info(f"Off-scope draft {draft_id} created for {customer_email}")
-            else:
-                logger.warning(f"Draft creation returned None for {customer_email}")
-        except Exception as _de:
-            logger.error(f"Off-scope draft creation error for {customer_email}: {_de}")
+        draft_html = draft_off_scope_reply(body, first_name, existing_missing, original_data)
+        from email_utils import create_gmail_draft
+        draft_id = create_gmail_draft(service, customer_email, reply_subject, draft_html, thread_id=thread_id)
+        if draft_id:
+            logger.info(f"Off-scope draft {draft_id} created for {customer_email}")
+        else:
+            logger.warning(f"Draft creation returned None for {customer_email}")
         _apply_label_with_retry(label_assistance_required, service, msg_id)
         try:
             state.log_booking_event(
