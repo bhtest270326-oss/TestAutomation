@@ -3654,6 +3654,105 @@ body.ap-body {
   gap: 8px;
 }
 
+/* --- User Menu (topbar) -------------------------------------- */
+.ap-user-menu {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: 8px;
+}
+.ap-user-display-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ap-text);
+}
+@media (max-width: 768px) {
+  .ap-user-menu { display: none; }
+}
+
+/* --- Role Badge ---------------------------------------------- */
+.ap-role-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: capitalize;
+  line-height: 1.4;
+}
+.ap-role-badge--owner {
+  background: rgba(200, 16, 46, 0.15);
+  color: var(--ap-primary-light, #E8304A);
+  border: 1px solid rgba(200, 16, 46, 0.3);
+}
+.ap-role-badge--user {
+  background: rgba(34, 197, 94, 0.12);
+  color: var(--ap-green);
+  border: 1px solid rgba(34, 197, 94, 0.25);
+}
+.ap-role-badge--technician {
+  background: rgba(139, 92, 246, 0.12);
+  color: var(--ap-purple);
+  border: 1px solid rgba(139, 92, 246, 0.25);
+}
+
+/* --- Users Table --------------------------------------------- */
+.ap-users-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.ap-users-table th,
+.ap-users-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--ap-border);
+}
+.ap-users-table th {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ap-text-muted);
+  background: var(--ap-surface);
+}
+.ap-users-table tr:hover {
+  background: var(--ap-card-hover);
+}
+.ap-user-inactive {
+  opacity: 0.5;
+}
+
+/* --- Permission Matrix --------------------------------------- */
+.ap-perm-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.ap-perm-matrix th,
+.ap-perm-matrix td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--ap-border);
+}
+.ap-perm-matrix th {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ap-text-muted);
+  background: var(--ap-surface);
+}
+.ap-perm-matrix input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--ap-primary);
+}
+.ap-perm-matrix input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 /* --- Calendar Overlap / Conflict Indicators ------------------- */
 .cal-card-overlap {
     border-left: 3px solid var(--ap-amber, #f59e0b) !important;

@@ -51,11 +51,78 @@ const SECTION_INIT = {
   'manual-booking': () => typeof initManualBooking === 'function' && initManualBooking(),
 };
 
+// ── RBAC Permission Helpers ──────────────────────────────────
+function applyPermissions() {
+  var user = window.AP_USER;
+  if (!user || !user.permissions) return;
+
+  document.querySelectorAll('.ap-nav-item[data-section]').forEach(function(btn) {
+    var tabId = btn.dataset.section;
+    var perm = user.permissions[tabId];
+    if (perm && perm.can_view === false) {
+      btn.style.display = 'none';
+      var sec = document.getElementById('section-' + tabId);
+      if (sec) sec.style.display = 'none';
+    }
+  });
+
+  if (user.role !== 'owner') {
+    document.querySelectorAll('[data-owner-only]').forEach(function(el) {
+      el.style.display = 'none';
+    });
+  }
+}
+
+function canEdit(tabId) {
+  var user = window.AP_USER;
+  if (!user) return true;
+  if (user.role === 'owner') return true;
+  var perm = user.permissions && user.permissions[tabId];
+  return perm ? (perm.can_edit !== false) : false;
+}
+
+function applyEditPermissions() {
+  document.querySelectorAll('[data-requires-edit]').forEach(function(el) {
+    var tabId = el.getAttribute('data-requires-edit');
+    if (!canEdit(tabId)) {
+      el.style.display = 'none';
+    }
+  });
+}
+
+function populateUserMenu() {
+  var user = window.AP_USER;
+  if (!user) return;
+  var nameEl = document.getElementById('ap-user-display-name');
+  if (nameEl) nameEl.textContent = user.display_name || user.username || 'User';
+  var roleEl = document.getElementById('ap-user-role-badge');
+  if (roleEl) {
+    roleEl.textContent = user.role || 'user';
+    roleEl.className = 'ap-role-badge ap-role-badge--' + (user.role || 'user');
+  }
+}
+
+function userLogout() {
+  fetch('/v2/auth/logout', { method: 'POST', credentials: 'same-origin' })
+    .then(function() { window.location.href = '/v2/login'; })
+    .catch(function() { window.location.href = '/v2/login'; });
+}
+
 // ── Section Navigation ───────────────────────────────────────
 function showSection(name) {
   if (!SECTION_META[name]) {
     console.warn('showSection: unknown section', name);
     return;
+  }
+
+  // RBAC guard: block navigation if user lacks can_view for this tab
+  var user = window.AP_USER;
+  if (user && user.permissions) {
+    var perm = user.permissions[name];
+    if (perm && perm.can_view === false) {
+      console.warn('showSection: permission denied for', name);
+      return;
+    }
   }
 
   // Hide all sections
@@ -112,6 +179,9 @@ function showSection(name) {
   if (SECTION_INIT[name]) {
     SECTION_INIT[name]();
   }
+
+  // Re-apply edit permissions after section content loads
+  applyEditPermissions();
 }
 
 // ── API Client ───────────────────────────────────────────────
@@ -928,5 +998,10 @@ document.addEventListener('DOMContentLoaded', function() {
   if (notifBell) {
     notifBell.addEventListener('click', toggleNotifications);
   }
+
+  // RBAC: apply permissions after DOM is ready
+  populateUserMenu();
+  applyPermissions();
+  applyEditPermissions();
 });
 """
