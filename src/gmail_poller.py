@@ -1089,7 +1089,7 @@ def handle_availability_inquiry(msg_id, thread_id, subject, body, customer_email
 
     inner_html = format_availability_response(
         first_name, availability, service_description,
-        missing_fields=missing_fields if missing_fields else None,
+        missing_fields=missing_fields,
         requested_date=requested_date,
     )
 
@@ -1850,11 +1850,13 @@ def _send_availability_confirmation(service, state, msg_id, thread_id, subject, 
             missing_fields=clarification_fields,
         )
 
-    # Format availability email — include any fields still needed from the customer
+    # Format availability email — include any fields still needed from the customer.
+    # Pass missing_fields directly (even if empty list) so the template knows
+    # extraction ran and doesn't fall back to asking for ALL default fields.
     from email_utils import send_customer_email as _send_email
     inner_html = format_availability_response(
         first_name, availability, service_description,
-        missing_fields=missing_fields if missing_fields else None,
+        missing_fields=missing_fields,
         requested_date=requested_date,
     )
     reply_subject = subject if subject.lower().startswith('re:') else f"Re: {subject}"
