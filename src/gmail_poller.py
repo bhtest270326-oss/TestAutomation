@@ -869,7 +869,7 @@ def _assign_best_slot(booking_data, state):
 
         booking_data['preferred_date'] = found_date
         booking_data['preferred_time'] = found_time
-        logger.info(f"Slot assigned: {found_date} {found_time} (preferred {preferred_dates}, original time {original_time})")
+        logger.info(f"Slot assigned: {found_date} {found_time} (preferred {target_date}, original time {original_time})")
     except Exception as e:
         logger.warning(f"Slot computation skipped, keeping AI-extracted time: {e}")
 
