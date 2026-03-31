@@ -820,14 +820,14 @@ class StateManager:
         return True
 
     def expire_booking(self, booking_id):
-        """Expire a pending booking that received no owner response within the time limit."""
+        """Expire a booking that received no owner response within the time limit."""
         with self._conn() as conn:
             result = conn.execute("""
                 UPDATE bookings SET status='expired', declined_at=?
-                WHERE id=? AND status='pending'
+                WHERE id=? AND status IN ('pending', 'awaiting_owner')
             """, (datetime.now(timezone.utc).isoformat(), booking_id))
             if result.rowcount == 0:
-                logger.warning(f"expire_booking: {booking_id} not in pending state")
+                logger.warning(f"expire_booking: {booking_id} not in pending/awaiting_owner state")
                 return False
         self.log_booking_event(booking_id, 'expired', actor='system', details={'reason': 'no_owner_response'})
         logger.info(f"Expired booking {booking_id}")

@@ -300,18 +300,20 @@ def _process_single_message(service, state, msg_id):
 
 
 def _should_reprocess_stale(state, msg_id):
-    """Return True if a processed email has no associated booking, clarification, or DLQ entry,
-    OR if it was marked processed but has failed processing attempts (send failure bug).
+    """Return True only if an email has recorded failed processing attempts < 3.
 
-    This catches emails that were marked processed by old buggy code without
-    any action being taken. They need to be re-processed.
+    Previously this returned True for any processed email with no booking/
+    clarification/DLQ record, but that caused an infinite loop for non-booking
+    emails (GitHub notifications, bounce emails, etc.) that are correctly
+    processed as "not a booking request" and leave no trace.
+
+    Now only emails with explicit failed attempts are retried.
     """
     try:
         from state_manager import _get_conn
         with _get_conn() as conn:
-            # If the email has failed processing attempts and fewer than 3,
-            # it was likely marked processed despite a send failure (old bug).
-            # Unmark it so the retry mechanism can pick it up.
+            # Only retry emails that have recorded failures and haven't
+            # exhausted their attempts yet.
             attempt_row = conn.execute(
                 "SELECT attempts FROM email_processing_attempts WHERE msg_id = ? LIMIT 1",
                 (msg_id,)
@@ -319,32 +321,10 @@ def _should_reprocess_stale(state, msg_id):
             if attempt_row and attempt_row['attempts'] < 3:
                 return True
 
-            # Check if there's a booking with this msg_id
-            booking = conn.execute(
-                "SELECT id FROM bookings WHERE gmail_msg_id = ? LIMIT 1", (msg_id,)
-            ).fetchone()
-            if booking:
-                return False
-
-            # Check if there's a pending clarification with this msg_id
-            clarification = conn.execute(
-                "SELECT id FROM clarifications WHERE gmail_msg_id = ? LIMIT 1", (msg_id,)
-            ).fetchone()
-            if clarification:
-                return False
-
-            # Check if it's in the DLQ (intentionally processed as a failure)
-            dlq = conn.execute(
-                "SELECT id FROM failed_extractions WHERE gmail_msg_id = ? LIMIT 1", (msg_id,)
-            ).fetchone()
-            if dlq:
-                return False
-
-        # No evidence of any action — this was a stale/buggy mark
-        return True
+        return False
     except Exception as e:
         logger.debug(f"_should_reprocess_stale check failed for {msg_id}: {e}")
-        return False  # fail safe — don't re-process on error
+        return False
 
 
 def _process_single_message_inner(service, state, msg_id):
@@ -1446,6 +1426,20 @@ def handle_clarification_reply(service, state, msg_id, thread_id, existing_pendi
         still_missing.append('Your suburb or service address')
     if not merged_data.get('preferred_date'):
         still_missing.append('Your preferred date')
+
+    # CORE RULE: The customer must explicitly confirm a date.
+    # _send_availability_confirmation adds 'confirmation of your preferred date'
+    # to the clarification's missing_fields. If the customer's reply didn't
+    # explicitly mention/confirm a date (new_data has no preferred_date), keep
+    # the confirmation requirement even if the AI previously extracted a date
+    # from their original vague email.
+    if not still_missing:
+        date_confirmation_required = any(
+            'confirm' in f.lower() and 'date' in f.lower()
+            for f in existing_missing
+        )
+        if date_confirmation_required and not new_data.get('preferred_date'):
+            still_missing.append('confirmation of your preferred available day')
 
     if still_missing:
         # Before looping with another clarification, check if the customer is
