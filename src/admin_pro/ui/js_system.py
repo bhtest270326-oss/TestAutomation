@@ -642,7 +642,7 @@ async function loadRolePermissions() {
     var saveButtons = '';
     roles.forEach(function(r) {
       if (r.role !== 'owner') {
-        saveButtons += '<button class="ap-btn ap-btn-primary ap-btn-sm" style="margin-right:8px" onclick="saveRolePermissions(\'' + r.role + '\')">Save ' + escapeHtml(r.display_name || r.role) + '</button>';
+        saveButtons += '<button class="ap-btn ap-btn-primary ap-btn-sm" style="margin-right:8px" onclick="saveRolePermissions(\\'' + r.role + '\\')">Save ' + escapeHtml(r.display_name || r.role) + '</button>';
       }
     });
 
