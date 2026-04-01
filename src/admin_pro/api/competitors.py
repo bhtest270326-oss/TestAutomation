@@ -12,13 +12,19 @@ logger = logging.getLogger(__name__)
 _sm = StateManager()
 
 
-def register(bp, require_auth):
+def register(bp, require_auth, require_permission=None):
+    if require_permission is None:
+        def require_permission(tab_id, need_edit=False):
+            def decorator(f):
+                return f
+            return decorator
 
     # ------------------------------------------------------------------
     # GET /api/competitors — list all competitors
     # ------------------------------------------------------------------
     @bp.route("/api/competitors", methods=["GET"])
     @require_auth
+    @require_permission('market-pricing')
     def list_competitors():
         try:
             active_only = request.args.get('active_only', '1') == '1'
@@ -33,6 +39,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route("/api/competitors", methods=["POST"])
     @require_auth
+    @require_permission('market-pricing', need_edit=True)
     def add_competitor():
         try:
             body = request.get_json(force=True) or {}
@@ -55,6 +62,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route("/api/competitors/<int:comp_id>", methods=["PUT"])
     @require_auth
+    @require_permission('market-pricing', need_edit=True)
     def update_competitor(comp_id):
         try:
             body = request.get_json(force=True) or {}
@@ -71,6 +79,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route("/api/competitors/prices", methods=["GET"])
     @require_auth
+    @require_permission('market-pricing')
     def get_prices():
         try:
             service_type = request.args.get('service_type')
@@ -89,6 +98,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route("/api/competitors/<int:comp_id>/prices", methods=["POST"])
     @require_auth
+    @require_permission('market-pricing', need_edit=True)
     def add_price(comp_id):
         try:
             body = request.get_json(force=True) or {}
@@ -117,6 +127,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route("/api/competitors/comparison", methods=["GET"])
     @require_auth
+    @require_permission('market-pricing')
     def price_comparison():
         try:
             service_type = request.args.get('service_type')
@@ -128,5 +139,5 @@ def register(bp, require_auth):
 
 
 # Auto-register when imported by admin_pro/__init__.py
-from admin_pro import admin_pro_bp, require_auth  # noqa: E402
-register(admin_pro_bp, require_auth)
+from admin_pro import admin_pro_bp, require_auth, require_permission  # noqa: E402
+register(admin_pro_bp, require_auth, require_permission)

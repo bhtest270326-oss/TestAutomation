@@ -77,7 +77,8 @@ if ('serviceWorker' in navigator) {{
 _CACHED_HTML = None
 
 def register(bp, require_auth):
-    from flask import Response, request
+    from flask import Response, request, g
+    import json as _json
 
     @bp.route('/', methods=['GET'])
     @require_auth
@@ -94,10 +95,33 @@ def register(bp, require_auth):
 
         html = _CACHED_HTML
 
+        # Inject window.AP_USER for the frontend
+        from state_manager import StateManager, ALL_TAB_IDS
+        state = StateManager()
+        current_user = getattr(g, 'current_user', None) or {}
+        user_role = current_user.get('role', 'owner')
+        if user_role == 'owner':
+            permissions = {tab: {'can_view': True, 'can_edit': True} for tab in ALL_TAB_IDS}
+        else:
+            permissions = state.get_role_permissions(user_role)
+        user_data = {
+            'user_id': current_user.get('user_id', 0),
+            'username': current_user.get('username', 'admin'),
+            'display_name': current_user.get('display_name', 'Admin'),
+            'role': user_role,
+            'permissions': permissions,
+        }
+        user_script = '<script>window.AP_USER=' + _json.dumps(user_data) + ';</script>'
+        html = html.replace('</head>', user_script + '\n</head>')
+
         # Create a session cookie so that all API fetch() calls from this
         # browser are automatically authenticated (cookie is sent same-origin).
         from admin_pro import _create_session
-        sid = _create_session()
+        sid = _create_session(
+            user_id=current_user.get('user_id', 0),
+            username=current_user.get('username', 'admin'),
+            role=user_role,
+        )
         csrf_token = secrets.token_hex(32)
 
         resp = Response(html, mimetype='text/html')

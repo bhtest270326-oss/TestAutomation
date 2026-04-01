@@ -11,11 +11,17 @@ from state_manager import StateManager, _get_conn
 logger = logging.getLogger(__name__)
 
 
-def register(bp, require_auth):
+def register(bp, require_auth, require_permission=None):
     """Register manual booking API routes on *bp*."""
+    if require_permission is None:
+        def require_permission(tab_id, need_edit=False):
+            def decorator(f):
+                return f
+            return decorator
 
     @bp.route('/api/manual-bookings/create', methods=['POST'])
     @require_auth
+    @require_permission('manual-booking', need_edit=True)
     def create_manual_booking():
         body = request.get_json(silent=True)
         if not body:
@@ -89,5 +95,5 @@ def register(bp, require_auth):
 
 
 # Self-registration
-from admin_pro import admin_pro_bp, require_auth  # noqa: E402
-register(admin_pro_bp, require_auth)
+from admin_pro import admin_pro_bp, require_auth, require_permission  # noqa: E402
+register(admin_pro_bp, require_auth, require_permission)
