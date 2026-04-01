@@ -353,9 +353,10 @@ def classify_clarification_reply(body: str, subject: str) -> str:
 
 BOOKING_FAQ = {
     'pricing': (
-        "Our pricing depends on the number of rims and type of damage. "
-        "As a guide, single wheel repairs typically start from around $120–$150. "
-        "We'll give you a firm quote once we assess the damage on the day. "
+        "Our standard pricing is $225 + GST per rim, and can go up to $300 per rim "
+        "depending on the extent of the damage. "
+        "If you could send through some photos of the damage, we can confirm the exact price "
+        "once images have been reviewed and your booking is confirmed. "
         "Payment is by EFTPOS on the day of the appointment."
     ),
     'service_area': (
@@ -1156,9 +1157,11 @@ Date: {date} at {time}
 Address: {address}"""
 
     if damage:
-        msg += f"\nDamage: {damage}"
+        dmg_text = damage[:100] + ('...' if len(damage) > 100 else '')
+        msg += f"\nDamage: {dmg_text}"
     if notes:
-        msg += f"\nNotes: {notes}"
+        note_text = notes[:80] + ('...' if len(notes) > 80 else '')
+        msg += f"\nNotes: {note_text}"
 
     image_assessment = booking_data.get('image_assessment')
     if image_assessment and image_assessment.get('damage_level') != 'not_visible':
@@ -1168,13 +1171,15 @@ Address: {address}"""
         est_min = image_assessment.get('estimated_minutes', '')
         confidence = image_assessment.get('confidence', '')
         assessment_notes = image_assessment.get('assessment_notes', '')
-        msg += f"\n\n📸 AI Image Assessment ({confidence} confidence):"
+        msg += f"\n\nAI Assessment ({confidence}):"
         msg += f"\n  Damage: {dmg}"
-        msg += f"\n  Estimate: ${p_min}–${p_max} | {est_min} min"
+        msg += f"\n  Est: ${p_min}-${p_max} | {est_min} min"
         if assessment_notes:
-            msg += f"\n  Notes: {assessment_notes}"
+            # Truncate long assessment notes to keep SMS within carrier limits
+            note_text = assessment_notes[:80] + ('...' if len(assessment_notes) > 80 else '')
+            msg += f"\n  Notes: {note_text}"
 
-    msg += "\n\nReply YES to confirm, NO to decline, or send any changes (e.g. 'find a free slot on 01/04', 'change time to 11am')"
+    msg += "\n\nReply YES to confirm, NO to decline, or send changes"
     return msg
 
 

@@ -22,10 +22,11 @@ _SYSTEM_PROMPT = (
     "3. Estimated job duration in minutes\n"
     "4. Price estimate in AUD\n\n"
     "Pricing guide:\n"
-    "  Minor scuff/scratch — 1 rim: $120–$150, 90–120 min\n"
-    "  Moderate kerb damage — 1 rim: $150–$200, 120–150 min\n"
-    "  Severe buckle/crack  — 1 rim: $200–$280, 150–180 min\n"
-    "  Each additional rim: +$100–$150, +60–90 min\n\n"
+    "  Standard pricing is $225 + GST per rim\n"
+    "  Extensive damage can go up to $300 per rim\n"
+    "  Minor scuff/scratch — 1 rim: $225, 90–120 min\n"
+    "  Moderate kerb damage — 1 rim: $225–$265, 120–150 min\n"
+    "  Severe buckle/crack  — 1 rim: $265–$300, 150–180 min\n\n"
     "Respond ONLY with valid JSON — no markdown, no prose."
 )
 
@@ -36,8 +37,8 @@ _ANALYSIS_PROMPT = (
     '  "damage_level": "minor|moderate|severe|not_visible",\n'
     '  "num_rims_detected": 1,\n'
     '  "estimated_minutes": 120,\n'
-    '  "price_min": 120,\n'
-    '  "price_max": 150,\n'
+    '  "price_min": 225,\n'
+    '  "price_max": 300,\n'
     '  "assessment_notes": "Brief professional description of the damage visible",\n'
     '  "confidence": "high|medium|low"\n'
     "}\n\n"
