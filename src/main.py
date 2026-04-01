@@ -3,7 +3,7 @@ import sys
 import time
 import threading
 import logging
-from pythonjsonlogger import jsonlogger
+from pythonjsonlogger.json import JsonFormatter
 from webhook_server import create_app
 from gmail_poller import poll_gmail, register_gmail_watch, recover_stale_emails, retry_failed_emails
 from twilio_handler import poll_sms_replies
@@ -15,7 +15,7 @@ def _configure_logging():
     log_level = os.environ.get('LOG_LEVEL', 'INFO').upper()
 
     # JSON formatter — every log line is a parseable JSON object
-    formatter = jsonlogger.JsonFormatter(
+    formatter = JsonFormatter(
         fmt='%(asctime)s %(name)s %(levelname)s %(message)s %(trace_id)s %(span)s',
         datefmt='%Y-%m-%dT%H:%M:%S',
         rename_fields={'asctime': 'ts', 'name': 'logger', 'levelname': 'level'}
