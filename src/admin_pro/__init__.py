@@ -440,8 +440,11 @@ def auth_login():
     if _rate_limit_check(client_ip):
         return json_err('Too many failed attempts. Try again later.', 429)
 
-    # Try DB auth first
-    user = _credentials_valid_db(username, password)
+    # Try DB auth first (case-insensitive username)
+    user = _credentials_valid_db(username.lower(), password)
+    if not user:
+        # Also try exact case in case DB stored mixed case
+        user = _credentials_valid_db(username, password)
     if user:
         _rate_limit_clear(client_ip)
         from state_manager import StateManager
@@ -460,10 +463,10 @@ def auth_login():
         resp.set_cookie('ap_session', sid, max_age=86400, httponly=True, secure=True, samesite='Strict')
         return resp
 
-    # Fallback: env-var auth (for backward compatibility when no DB users)
+    # Fallback: env-var auth (case-insensitive username comparison)
     admin_password = os.environ.get('ADMIN_PASSWORD', '')
     admin_username = os.environ.get('ADMIN_USERNAME', 'admin')
-    if admin_password and hmac.compare_digest(username.encode(), admin_username.encode()) and hmac.compare_digest(password.encode(), admin_password.encode()):
+    if admin_password and hmac.compare_digest(username.lower().encode(), admin_username.lower().encode()) and hmac.compare_digest(password.encode(), admin_password.encode()):
         _rate_limit_clear(client_ip)
         sid = _create_session(user_id=0, username=admin_username, role='owner')
         resp = make_response(jsonify({
@@ -478,6 +481,7 @@ def auth_login():
         resp.set_cookie('ap_session', sid, max_age=86400, httponly=True, secure=True, samesite='Strict')
         return resp
 
+    logger.warning("Login failed for username=%r from IP=%s (DB auth and env-var fallback both failed)", username, client_ip)
     _rate_limit_record_failure(client_ip)
     return json_err('Invalid username or password', 401)
 
