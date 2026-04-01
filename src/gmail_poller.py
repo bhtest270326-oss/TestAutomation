@@ -515,21 +515,30 @@ def recover_stale_emails():
             return
 
         recovered = 0
+        unseen = 0
         from email_utils import gmail_send_is_blocked
         for msg_ref in messages:
             msg_id = msg_ref['id']
-            if state.is_email_processed(msg_id) and _should_reprocess_stale(state, msg_id):
+            if not state.is_email_processed(msg_id):
+                # Never seen — process it now (catches emails that arrived
+                # between deploy cycles or just before watch registration)
+                logger.info(f"Stale email recovery: processing unseen email {msg_id}")
+                if gmail_send_is_blocked():
+                    unseen += 1
+                    continue
+                _process_single_message(service, state, msg_id)
+                unseen += 1
+            elif _should_reprocess_stale(state, msg_id):
                 logger.warning(f"Stale email recovery: re-processing {msg_id}")
                 state.unmark_email_processed(msg_id)
                 if gmail_send_is_blocked():
-                    # Just unmark — retry_failed_emails will pick it up when rate limit lifts
                     recovered += 1
                     continue
                 _process_single_message(service, state, msg_id)
                 recovered += 1
 
-        if recovered:
-            logger.info(f"Stale email recovery: re-processed {recovered} email(s)")
+        if recovered or unseen:
+            logger.info(f"Stale email recovery: {unseen} unseen processed, {recovered} stale re-processed")
         else:
             logger.info("Stale email recovery: no stale emails found")
     except Exception as e:
