@@ -39,7 +39,7 @@ def register(bp, require_auth, require_permission=None):
             for u in users:
                 u.pop('password_hash', None)
                 u.pop('totp_secret', None)
-            return json_ok(users)
+            return json_ok({'users': users})
         except Exception as e:
             logger.error("list_users error: %s", e, exc_info=True)
             return json_err(str(e), 500)
