@@ -6,13 +6,19 @@ from flask import Blueprint, jsonify, request
 logger = logging.getLogger(__name__)
 
 
-def register(bp, require_auth):
+def register(bp, require_auth, require_permission=None):
+    if require_permission is None:
+        def require_permission(tab_id, need_edit=False):
+            def decorator(f):
+                return f
+            return decorator
 
     # ------------------------------------------------------------------
     # GET /api/comms/gmail
     # ------------------------------------------------------------------
     @bp.route("/api/comms/gmail", methods=["GET"])
     @require_auth
+    @require_permission('comms')
     def comms_gmail():
         try:
             limit = min(100, max(1, int(request.args.get("limit", 20))))
@@ -95,6 +101,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route("/api/comms/dlq", methods=["GET"])
     @require_auth
+    @require_permission('comms')
     def comms_dlq():
         try:
             from state_manager import _get_conn
@@ -128,6 +135,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route("/api/comms/dlq/<msg_id>/dismiss", methods=["POST"])
     @require_auth
+    @require_permission('comms', need_edit=True)
     def comms_dlq_dismiss(msg_id):
         try:
             from state_manager import _get_conn
@@ -147,6 +155,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route("/api/comms/sms", methods=["POST"])
     @require_auth
+    @require_permission('comms', need_edit=True)
     def comms_send_sms():
         try:
             body = request.get_json(force=True) or {}
@@ -174,6 +183,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route("/api/comms/clarifications", methods=["GET"])
     @require_auth
+    @require_permission('comms')
     def comms_clarifications():
         try:
             from state_manager import _get_conn
@@ -204,6 +214,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route("/api/comms/waitlist", methods=["GET"])
     @require_auth
+    @require_permission('comms')
     def comms_waitlist():
         try:
             from state_manager import _get_conn
@@ -235,6 +246,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route("/api/comms/waitlist/<int:waitlist_id>/notify", methods=["POST"])
     @require_auth
+    @require_permission('comms', need_edit=True)
     def comms_waitlist_notify(waitlist_id):
         try:
             from state_manager import StateManager
@@ -250,6 +262,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route("/api/comms/sms/log", methods=["GET"])
     @require_auth
+    @require_permission('comms')
     def comms_sms_log():
         """Return recent outbound SMS from sms_log table (if it exists)."""
         try:
@@ -274,6 +287,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route("/api/comms/activity", methods=["GET"])
     @require_auth
+    @require_permission('comms')
     def comms_activity():
         try:
             limit = min(200, max(1, int(request.args.get("limit", 50))))
@@ -314,6 +328,6 @@ def register(bp, require_auth):
 
 
 # Self-registration when module is imported directly
-from admin_pro import admin_pro_bp, require_auth  # noqa: E402
+from admin_pro import admin_pro_bp, require_auth, require_permission  # noqa: E402
 
-register(admin_pro_bp, require_auth)
+register(admin_pro_bp, require_auth, require_permission)

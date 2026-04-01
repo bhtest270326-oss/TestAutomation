@@ -16,7 +16,12 @@ _STATE_FILE_JSON = os.environ.get('STATE_FILE', '/data/booking_state.json')
 DB_PATH = os.path.splitext(_STATE_FILE_JSON)[0] + '.db'
 
 
-def register(bp, require_auth):
+def register(bp, require_auth, require_permission=None):
+    if require_permission is None:
+        def require_permission(tab_id, need_edit=False):
+            def decorator(f):
+                return f
+            return decorator
 
     # ------------------------------------------------------------------
     # GET /api/system/health
@@ -24,6 +29,7 @@ def register(bp, require_auth):
 
     @bp.route('/api/system/health', methods=['GET'])
     @require_auth
+    @require_permission('system')
     def system_health():
         result = {}
 
@@ -85,6 +91,7 @@ def register(bp, require_auth):
 
     @bp.route('/api/system/flags', methods=['GET'])
     @require_auth
+    @require_permission('system')
     def get_flags():
         try:
             from feature_flags import get_all_flags
@@ -99,6 +106,7 @@ def register(bp, require_auth):
 
     @bp.route('/api/system/flags/<key>', methods=['POST'])
     @require_auth
+    @require_permission('system', need_edit=True)
     def set_flag_route(key):
         try:
             from feature_flags import set_flag, FLAGS
@@ -126,6 +134,7 @@ def register(bp, require_auth):
 
     @bp.route('/api/system/db-stats', methods=['GET'])
     @require_auth
+    @require_permission('system')
     def db_stats():
         try:
             conn = sqlite3.connect(DB_PATH, timeout=5)
@@ -156,6 +165,7 @@ def register(bp, require_auth):
 
     @bp.route('/api/system/cancel-day', methods=['POST'])
     @require_auth
+    @require_permission('system', need_edit=True)
     def cancel_day():
         try:
             body = request.get_json(force=True, silent=True) or {}
@@ -177,6 +187,7 @@ def register(bp, require_auth):
 
     @bp.route('/api/system/app-state', methods=['GET'])
     @require_auth
+    @require_permission('system')
     def get_app_state_all():
         try:
             conn = sqlite3.connect(DB_PATH, timeout=5)
@@ -197,6 +208,7 @@ def register(bp, require_auth):
 
     @bp.route('/api/system/app-state/<key>', methods=['POST'])
     @require_auth
+    @require_permission('system', need_edit=True)
     def set_app_state_route(key):
         try:
             if any(key == bk or key.startswith(bk) for bk in _BLOCKED_STATE_KEYS):
@@ -220,6 +232,7 @@ def register(bp, require_auth):
 
     @bp.route("/api/system/backup-status", methods=["GET"])
     @require_auth
+    @require_permission('system')
     def backup_status():
         """Return the current backup status from app_state."""
         try:
@@ -236,6 +249,7 @@ def register(bp, require_auth):
 
     @bp.route("/api/system/backup-now", methods=["POST"])
     @require_auth
+    @require_permission('system', need_edit=True)
     def backup_now():
         """Trigger an immediate backup to Google Drive."""
         try:
@@ -252,6 +266,7 @@ def register(bp, require_auth):
 
     @bp.route('/api/system/waitlist', methods=['GET'])
     @require_auth
+    @require_permission('system')
     def get_waitlist():
         try:
             import json as _json
@@ -282,6 +297,7 @@ def register(bp, require_auth):
 
     @bp.route('/api/system/metrics', methods=['GET'])
     @require_auth
+    @require_permission('system')
     def system_metrics():
         from datetime import datetime, timedelta, timezone
 
@@ -393,6 +409,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/calendar/sync', methods=['POST'])
     @require_auth
+    @require_permission('system', need_edit=True)
     def calendar_sync():
         try:
             from scheduler import sync_google_calendar
@@ -407,6 +424,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/gmail/poll', methods=['POST'])
     @require_auth
+    @require_permission('system', need_edit=True)
     def gmail_poll():
         try:
             from gmail_poller import poll_gmail
@@ -421,6 +439,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/system/recent-activity', methods=['GET'])
     @require_auth
+    @require_permission('system')
     def recent_activity():
         try:
             limit = min(int(request.args.get('limit', 20)), 100)
@@ -438,5 +457,5 @@ def register(bp, require_auth):
 
 
 # ---------------------------------------------------------------------------
-from admin_pro import admin_pro_bp, require_auth  # noqa: E402
-register(admin_pro_bp, require_auth)
+from admin_pro import admin_pro_bp, require_auth, require_permission  # noqa: E402
+register(admin_pro_bp, require_auth, require_permission)

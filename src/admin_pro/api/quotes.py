@@ -10,14 +10,20 @@ from flask import request, jsonify
 logger = logging.getLogger(__name__)
 
 
-def register(bp, require_auth):
+def register(bp, require_auth, require_permission=None):
     """Register quote and damage scoring API routes on *bp*."""
+    if require_permission is None:
+        def require_permission(tab_id, need_edit=False):
+            def decorator(f):
+                return f
+            return decorator
 
     # ------------------------------------------------------------------
     # GET /api/quotes/list — list all quotes
     # ------------------------------------------------------------------
     @bp.route('/api/quotes/list', methods=['GET'])
     @require_auth
+    @require_permission('quotes')
     def list_quotes():
         try:
             from quoting_engine import _ensure_quotes_table
@@ -50,6 +56,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/quotes/generate', methods=['POST'])
     @require_auth
+    @require_permission('quotes', need_edit=True)
     def generate_quote_endpoint():
         try:
             body = request.get_json(silent=True) or {}
@@ -107,6 +114,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/damage/score', methods=['POST'])
     @require_auth
+    @require_permission('quotes', need_edit=True)
     def score_damage_endpoint():
         try:
             body = request.get_json(silent=True) or {}
@@ -138,6 +146,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/quotes/<booking_id>', methods=['GET'])
     @require_auth
+    @require_permission('quotes')
     def get_quote_endpoint(booking_id):
         try:
             from quoting_engine import get_quote_for_booking
@@ -157,5 +166,5 @@ def register(bp, require_auth):
 # ---------------------------------------------------------------------------
 # Self-registration — executed when the module is imported by admin_pro/__init__.py
 # ---------------------------------------------------------------------------
-from admin_pro import admin_pro_bp, require_auth  # noqa: E402
-register(admin_pro_bp, require_auth)
+from admin_pro import admin_pro_bp, require_auth, require_permission  # noqa: E402
+register(admin_pro_bp, require_auth, require_permission)
