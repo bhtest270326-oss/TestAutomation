@@ -8,6 +8,14 @@ from flask import request
 
 from state_manager import StateManager, ALL_TAB_IDS
 
+# Human-readable labels for each tab ID
+_TAB_LABELS = {
+    'dashboard': 'Dashboard', 'activity': 'Activity Feed', 'bookings': 'Bookings',
+    'calendar': 'Calendar', 'customers': 'Customers', 'comms': 'Communications',
+    'analytics': 'Analytics', 'market-pricing': 'Market Pricing', 'quotes': 'Quotes',
+    'manual-booking': 'New Booking', 'waitlist': 'Waitlist', 'system': 'System',
+}
+
 logger = logging.getLogger(__name__)
 
 
@@ -166,7 +174,8 @@ def register(bp, require_auth, require_permission=None):
                     'is_system': bool(role.get('is_system')),
                     'permissions': perms,
                 })
-            return json_ok({'roles': result, 'all_tabs': ALL_TAB_IDS})
+            all_tabs = [{'id': t, 'label': _TAB_LABELS.get(t, t.replace('-', ' ').title())} for t in ALL_TAB_IDS]
+            return json_ok({'roles': result, 'all_tabs': all_tabs})
         except Exception as e:
             logger.error("list_roles error: %s", e, exc_info=True)
             return json_err(str(e), 500)
