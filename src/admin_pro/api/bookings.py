@@ -121,14 +121,20 @@ def _week_bounds():
 # Registration
 # ---------------------------------------------------------------------------
 
-def register(bp, require_auth):
+def register(bp, require_auth, require_permission=None):
     """Register all booking API routes on *bp* using *require_auth* decorator."""
+    if require_permission is None:
+        def require_permission(tab_id, need_edit=False):
+            def decorator(f):
+                return f
+            return decorator
 
     # ------------------------------------------------------------------
     # GET /api/bookings — paginated list with optional filters
     # ------------------------------------------------------------------
     @bp.route('/api/bookings', methods=['GET'])
     @require_auth
+    @require_permission('bookings')
     def list_bookings():
         try:
             status = request.args.get('status', 'all')
@@ -215,6 +221,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/bookings/stats', methods=['GET'])
     @require_auth
+    @require_permission('bookings')
     def booking_stats():
         try:
             today = datetime.now(timezone.utc).date().isoformat()
@@ -267,6 +274,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/bookings/<booking_id>', methods=['GET'])
     @require_auth
+    @require_permission('bookings')
     def get_booking(booking_id):
         try:
             with _get_conn() as conn:
@@ -305,6 +313,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/bookings/<booking_id>/events', methods=['GET'])
     @require_auth
+    @require_permission('bookings')
     def get_booking_events(booking_id):
         try:
             with _get_conn() as conn:
@@ -333,6 +342,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/bookings/<booking_id>/confirm', methods=['POST'])
     @require_auth
+    @require_permission('bookings', need_edit=True)
     def confirm_booking(booking_id):
         try:
             state = StateManager()
@@ -427,6 +437,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/bookings/<booking_id>/decline', methods=['POST'])
     @require_auth
+    @require_permission('bookings', need_edit=True)
     def decline_booking(booking_id):
         try:
             body = request.get_json(silent=True) or {}
@@ -490,6 +501,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/bookings/<booking_id>/cancel', methods=['POST'])
     @require_auth
+    @require_permission('bookings', need_edit=True)
     def cancel_booking(booking_id):
         try:
             body = request.get_json(silent=True) or {}
@@ -538,6 +550,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/bookings/<booking_id>/edit', methods=['POST'])
     @require_auth
+    @require_permission('bookings', need_edit=True)
     def edit_booking(booking_id):
         try:
             body = request.get_json(silent=True)
@@ -659,6 +672,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/bookings/<booking_id>/notes', methods=['POST'])
     @require_auth
+    @require_permission('bookings', need_edit=True)
     def add_booking_note(booking_id):
         try:
             body = request.get_json(silent=True) or {}
@@ -693,6 +707,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/bookings/bulk', methods=['POST'])
     @require_auth
+    @require_permission('bookings', need_edit=True)
     def bulk_action():
         try:
             body = request.get_json(silent=True) or {}
@@ -804,6 +819,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/bookings/<booking_id>/mark-moved', methods=['POST'])
     @require_auth
+    @require_permission('bookings', need_edit=True)
     def mark_booking_moved(booking_id):
         try:
             body = request.get_json(silent=True) or {}
@@ -871,6 +887,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/bookings/<booking_id>/send-change-notification', methods=['POST'])
     @require_auth
+    @require_permission('bookings', need_edit=True)
     def send_change_notification(booking_id):
         try:
             state = StateManager()
@@ -981,5 +998,5 @@ def register(bp, require_auth):
 # ---------------------------------------------------------------------------
 # Self-registration — executed when the module is imported by admin_pro/__init__.py
 # ---------------------------------------------------------------------------
-from admin_pro import admin_pro_bp, require_auth  # noqa: E402
-register(admin_pro_bp, require_auth)
+from admin_pro import admin_pro_bp, require_auth, require_permission  # noqa: E402
+register(admin_pro_bp, require_auth, require_permission)

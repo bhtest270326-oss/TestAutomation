@@ -18,11 +18,17 @@ BUSINESS_ADDRESS = os.environ.get('BUSINESS_ADDRESS', '76 Albert St, Osborne Par
 GOOGLE_MAPS_API_KEY = os.environ.get('GOOGLE_MAPS_API_KEY', '')
 
 
-def register(bp, require_auth):
+def register(bp, require_auth, require_permission=None):
     """Register route optimization API endpoints on *bp*."""
+    if require_permission is None:
+        def require_permission(tab_id, need_edit=False):
+            def decorator(f):
+                return f
+            return decorator
 
     @bp.route('/api/route/<date>', methods=['GET'])
     @require_auth
+    @require_permission('bookings')
     def get_route(date):
         """Return optimized route data for a given date.
 
@@ -161,5 +167,5 @@ def register(bp, require_auth):
 # ---------------------------------------------------------------------------
 # Self-registration
 # ---------------------------------------------------------------------------
-from admin_pro import admin_pro_bp, require_auth  # noqa: E402
-register(admin_pro_bp, require_auth)
+from admin_pro import admin_pro_bp, require_auth, require_permission  # noqa: E402
+register(admin_pro_bp, require_auth, require_permission)

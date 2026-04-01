@@ -26,13 +26,19 @@ def _photos_dir_for(booking_id: str) -> str:
     return d
 
 
-def register(bp, require_auth):
+def register(bp, require_auth, require_permission=None):
+    if require_permission is None:
+        def require_permission(tab_id, need_edit=False):
+            def decorator(f):
+                return f
+            return decorator
 
     # ------------------------------------------------------------------
     # POST /api/bookings/<id>/photos  — upload a photo
     # ------------------------------------------------------------------
     @bp.route('/api/bookings/<booking_id>/photos', methods=['POST'])
     @require_auth
+    @require_permission('bookings', need_edit=True)
     def upload_photo(booking_id):
         if 'file' not in request.files:
             return jsonify({'ok': False, 'error': 'No file provided'}), 400
@@ -90,6 +96,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/bookings/<booking_id>/photos', methods=['GET'])
     @require_auth
+    @require_permission('bookings')
     def list_photos(booking_id):
         sm = StateManager()
         photos = sm.get_booking_photos(booking_id)
@@ -100,6 +107,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/photos/<int:photo_id>', methods=['GET'])
     @require_auth
+    @require_permission('bookings')
     def serve_photo(photo_id):
         sm = StateManager()
         photo = sm.get_booking_photo(photo_id)
@@ -119,6 +127,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/photos/<int:photo_id>', methods=['DELETE'])
     @require_auth
+    @require_permission('bookings', need_edit=True)
     def delete_photo(photo_id):
         sm = StateManager()
         photo = sm.get_booking_photo(photo_id)
@@ -141,5 +150,5 @@ def register(bp, require_auth):
 # ---------------------------------------------------------------------------
 # Self-registration — executed when the module is imported by admin_pro/__init__.py
 # ---------------------------------------------------------------------------
-from admin_pro import admin_pro_bp, require_auth  # noqa: E402
-register(admin_pro_bp, require_auth)
+from admin_pro import admin_pro_bp, require_auth, require_permission  # noqa: E402
+register(admin_pro_bp, require_auth, require_permission)

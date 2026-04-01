@@ -11,6 +11,8 @@ async function initSystem() {
     loadDbStats(),
     loadBackupStatus(),
     loadPerformanceMetrics(),
+    loadUserManagement(),
+    loadRolePermissions(),
   ]);
   // Start auto-refresh if checkbox is checked
   const cb = document.getElementById('metrics-autorefresh');
@@ -384,5 +386,300 @@ function injectFlagStyles() {
     .ap-toggle input:checked + .ap-toggle-slider:before { transform:translateX(20px); }
   `;
   document.head.appendChild(style);
+}
+
+// ── User Management (owner only) ─────────────────────────────────────────────
+
+async function loadUserManagement() {
+  var container = document.getElementById('system-user-mgmt');
+  if (!container) return;
+  var user = window.AP_USER;
+  if (!user || user.role !== 'owner') {
+    container.style.display = 'none';
+    return;
+  }
+  container.style.display = 'block';
+
+  try {
+    var data = await apiFetch('/api/users');
+    var users = (data.data && data.data.users) || [];
+    var rows = users.map(function(u) {
+      var roleCls = 'ap-role-badge ap-role-badge--' + escapeHtml(u.role);
+      var statusCls = u.is_active ? 'ap-badge ap-badge--green' : 'ap-badge ap-badge--grey';
+      var statusLabel = u.is_active ? 'Active' : 'Inactive';
+      var rowCls = u.is_active ? '' : ' class="ap-user-inactive"';
+      return '<tr' + rowCls + '>' +
+        '<td>' + escapeHtml(u.username) + '</td>' +
+        '<td>' + escapeHtml(u.display_name || '') + '</td>' +
+        '<td><span class="' + roleCls + '">' + escapeHtml(u.role) + '</span></td>' +
+        '<td><span class="' + statusCls + '">' + statusLabel + '</span></td>' +
+        '<td>' + (u.last_login_at ? relativeTime(u.last_login_at) : 'Never') + '</td>' +
+        '<td>' +
+          '<button class="ap-btn ap-btn-ghost ap-btn-xs" onclick="showEditUserModal(' + u.id + ')">Edit</button> ' +
+          (u.is_active
+            ? '<button class="ap-btn ap-btn-ghost ap-btn-xs" style="color:var(--ap-red)" data-uid="' + u.id + '" data-uname="' + escapeHtml(u.username) + '" onclick="deactivateUser(+this.dataset.uid, this.dataset.uname)">Deactivate</button>'
+            : '<button class="ap-btn ap-btn-ghost ap-btn-xs" style="color:var(--ap-green)" onclick="activateUser(' + u.id + ')">Activate</button>') +
+        '</td>' +
+      '</tr>';
+    }).join('');
+
+    container.innerHTML =
+      '<h3 class="ap-card-title ap-mb-16">User Management</h3>' +
+      '<div style="margin-bottom:12px">' +
+        '<button class="ap-btn ap-btn-primary ap-btn-sm" onclick="showAddUserModal()">Add User</button>' +
+      '</div>' +
+      '<div style="overflow-x:auto">' +
+        '<table class="ap-users-table">' +
+          '<thead><tr>' +
+            '<th>Username</th><th>Display Name</th><th>Role</th><th>Status</th><th>Last Login</th><th>Actions</th>' +
+          '</tr></thead>' +
+          '<tbody>' + rows + '</tbody>' +
+        '</table>' +
+      '</div>';
+  } catch (err) {
+    container.innerHTML = '<h3 class="ap-card-title ap-mb-16">User Management</h3>' +
+      '<p style="color:var(--ap-red)">Failed to load users: ' + escapeHtml(err.message) + '</p>';
+  }
+}
+
+function showAddUserModal() {
+  showModal(
+    'Add User',
+    '<div class="ap-form-group">' +
+      '<label class="ap-label" for="um-username">Username</label>' +
+      '<input class="ap-input" id="um-username" type="text" placeholder="Username" autocomplete="off">' +
+    '</div>' +
+    '<div class="ap-form-group ap-mt-16">' +
+      '<label class="ap-label" for="um-display-name">Display Name</label>' +
+      '<input class="ap-input" id="um-display-name" type="text" placeholder="Display name" autocomplete="off">' +
+    '</div>' +
+    '<div class="ap-form-group ap-mt-16">' +
+      '<label class="ap-label" for="um-password">Password</label>' +
+      '<input class="ap-input" id="um-password" type="password" placeholder="Min 8 characters" autocomplete="new-password">' +
+    '</div>' +
+    '<div class="ap-form-group ap-mt-16">' +
+      '<label class="ap-label" for="um-role">Role</label>' +
+      '<select class="ap-input" id="um-role">' +
+        '<option value="owner">Owner</option>' +
+        '<option value="user" selected>User</option>' +
+        '<option value="technician">Technician</option>' +
+      '</select>' +
+    '</div>',
+    '<button class="ap-btn ap-btn-primary" onclick="submitAddUser()">Create User</button>' +
+    '<button class="ap-btn ap-btn-ghost" onclick="closeModal()">Cancel</button>'
+  );
+}
+
+async function submitAddUser() {
+  var username = (document.getElementById('um-username') || {}).value || '';
+  var displayName = (document.getElementById('um-display-name') || {}).value || '';
+  var password = (document.getElementById('um-password') || {}).value || '';
+  var role = (document.getElementById('um-role') || {}).value || 'user';
+
+  if (!username.trim()) {
+    showToast('Username is required.', 'warning');
+    return;
+  }
+  if (password.length < 8) {
+    showToast('Password must be at least 8 characters.', 'warning');
+    return;
+  }
+
+  try {
+    await apiFetch('/api/users', {
+      method: 'POST',
+      body: JSON.stringify({
+        username: username.trim(),
+        password: password,
+        display_name: displayName.trim(),
+        role: role
+      })
+    });
+    closeModal();
+    showToast('User created successfully.', 'success');
+    loadUserManagement();
+  } catch (err) {
+    showToast('Failed to create user: ' + (err.message || 'Unknown error'), 'error');
+  }
+}
+
+async function showEditUserModal(userId) {
+  try {
+    var data = await apiFetch('/api/users');
+    var users = (data.data && data.data.users) || [];
+    var u = users.find(function(x) { return x.id === userId; });
+    if (!u) { showToast('User not found.', 'error'); return; }
+
+    showModal(
+      'Edit User — ' + escapeHtml(u.username),
+      '<div class="ap-form-group">' +
+        '<label class="ap-label">Username</label>' +
+        '<input class="ap-input" type="text" value="' + escapeHtml(u.username) + '" disabled readonly>' +
+      '</div>' +
+      '<div class="ap-form-group ap-mt-16">' +
+        '<label class="ap-label" for="um-edit-display-name">Display Name</label>' +
+        '<input class="ap-input" id="um-edit-display-name" type="text" value="' + escapeHtml(u.display_name || '') + '">' +
+      '</div>' +
+      '<div class="ap-form-group ap-mt-16">' +
+        '<label class="ap-label" for="um-edit-password">New Password <small style="color:var(--ap-text-muted)">(leave blank to keep current)</small></label>' +
+        '<input class="ap-input" id="um-edit-password" type="password" placeholder="Optional" autocomplete="new-password">' +
+      '</div>' +
+      '<div class="ap-form-group ap-mt-16">' +
+        '<label class="ap-label" for="um-edit-role">Role</label>' +
+        '<select class="ap-input" id="um-edit-role">' +
+          '<option value="owner"' + (u.role === 'owner' ? ' selected' : '') + '>Owner</option>' +
+          '<option value="user"' + (u.role === 'user' ? ' selected' : '') + '>User</option>' +
+          '<option value="technician"' + (u.role === 'technician' ? ' selected' : '') + '>Technician</option>' +
+        '</select>' +
+      '</div>',
+      '<button class="ap-btn ap-btn-primary" onclick="submitEditUser(' + userId + ')">Save Changes</button>' +
+      '<button class="ap-btn ap-btn-ghost" onclick="closeModal()">Cancel</button>'
+    );
+  } catch (err) {
+    showToast('Failed to load user: ' + (err.message || 'Unknown error'), 'error');
+  }
+}
+
+async function submitEditUser(userId) {
+  var displayName = (document.getElementById('um-edit-display-name') || {}).value || '';
+  var password = (document.getElementById('um-edit-password') || {}).value || '';
+  var role = (document.getElementById('um-edit-role') || {}).value || 'user';
+
+  var body = { display_name: displayName.trim(), role: role };
+  if (password) {
+    if (password.length < 8) {
+      showToast('Password must be at least 8 characters.', 'warning');
+      return;
+    }
+    body.password = password;
+  }
+
+  try {
+    await apiFetch('/api/users/' + userId, {
+      method: 'PUT',
+      body: JSON.stringify(body)
+    });
+    closeModal();
+    showToast('User updated successfully.', 'success');
+    loadUserManagement();
+  } catch (err) {
+    showToast('Failed to update user: ' + (err.message || 'Unknown error'), 'error');
+  }
+}
+
+async function deactivateUser(userId, username) {
+  if (!confirm('Deactivate user "' + username + '"? They will no longer be able to log in.')) return;
+  try {
+    await apiFetch('/api/users/' + userId, { method: 'DELETE' });
+    showToast('User deactivated.', 'success');
+    loadUserManagement();
+  } catch (err) {
+    showToast('Failed to deactivate: ' + (err.message || 'Unknown error'), 'error');
+  }
+}
+
+async function activateUser(userId) {
+  try {
+    await apiFetch('/api/users/' + userId, {
+      method: 'PUT',
+      body: JSON.stringify({ is_active: true })
+    });
+    showToast('User activated.', 'success');
+    loadUserManagement();
+  } catch (err) {
+    showToast('Failed to activate: ' + (err.message || 'Unknown error'), 'error');
+  }
+}
+
+// ── Role Permission Editor ───────────────────────────────────────────────────
+
+async function loadRolePermissions() {
+  var container = document.getElementById('system-role-perms');
+  if (!container) return;
+  var user = window.AP_USER;
+  if (!user || user.role !== 'owner') {
+    container.style.display = 'none';
+    return;
+  }
+  container.style.display = 'block';
+
+  try {
+    var data = await apiFetch('/api/roles');
+    var roles = (data.data && data.data.roles) || [];
+    var allTabs = (data.data && data.data.all_tabs) || [];
+
+    // Build header row
+    var headerCells = '<th>Tab</th>';
+    roles.forEach(function(r) {
+      headerCells += '<th colspan="2" style="text-align:center">' + escapeHtml(r.display_name || r.role) + '</th>';
+    });
+
+    // Build sub-header
+    var subHeader = '<th></th>';
+    roles.forEach(function() {
+      subHeader += '<th style="text-align:center;font-size:11px">View</th><th style="text-align:center;font-size:11px">Edit</th>';
+    });
+
+    // Build body rows
+    var bodyRows = '';
+    allTabs.forEach(function(tab) {
+      bodyRows += '<tr><td>' + escapeHtml(tab.label) + '</td>';
+      roles.forEach(function(r) {
+        var isOwner = (r.role === 'owner');
+        var perms = (r.permissions && r.permissions[tab.id]) || {};
+        var viewChecked = isOwner || perms.can_view !== false;
+        var editChecked = isOwner || perms.can_edit === true;
+        bodyRows +=
+          '<td style="text-align:center"><input type="checkbox" data-role="' + r.role + '" data-tab="' + tab.id + '" data-perm="can_view"' +
+            (viewChecked ? ' checked' : '') + (isOwner ? ' disabled' : '') + '></td>' +
+          '<td style="text-align:center"><input type="checkbox" data-role="' + r.role + '" data-tab="' + tab.id + '" data-perm="can_edit"' +
+            (editChecked ? ' checked' : '') + (isOwner ? ' disabled' : '') + '></td>';
+      });
+      bodyRows += '</tr>';
+    });
+
+    // Build save buttons per editable role
+    var saveButtons = '';
+    roles.forEach(function(r) {
+      if (r.role !== 'owner') {
+        saveButtons += '<button class="ap-btn ap-btn-primary ap-btn-sm" style="margin-right:8px" onclick="saveRolePermissions(\'' + r.role + '\')">Save ' + escapeHtml(r.display_name || r.role) + '</button>';
+      }
+    });
+
+    container.innerHTML =
+      '<h3 class="ap-card-title ap-mb-16">Role Permissions</h3>' +
+      '<div style="overflow-x:auto">' +
+        '<table class="ap-perm-matrix">' +
+          '<thead><tr>' + headerCells + '</tr><tr>' + subHeader + '</tr></thead>' +
+          '<tbody>' + bodyRows + '</tbody>' +
+        '</table>' +
+      '</div>' +
+      '<div style="margin-top:12px">' + saveButtons + '</div>';
+  } catch (err) {
+    container.innerHTML = '<h3 class="ap-card-title ap-mb-16">Role Permissions</h3>' +
+      '<p style="color:var(--ap-red)">Failed to load roles: ' + escapeHtml(err.message) + '</p>';
+  }
+}
+
+async function saveRolePermissions(role) {
+  var checkboxes = document.querySelectorAll('.ap-perm-matrix input[type="checkbox"][data-role="' + role + '"]');
+  var permissions = {};
+
+  checkboxes.forEach(function(cb) {
+    var tab = cb.dataset.tab;
+    var perm = cb.dataset.perm;
+    if (!permissions[tab]) permissions[tab] = {};
+    permissions[tab][perm] = cb.checked;
+  });
+
+  try {
+    await apiFetch('/api/roles/' + role + '/permissions', {
+      method: 'PUT',
+      body: JSON.stringify({ permissions: permissions })
+    });
+    showToast('Permissions saved for ' + role + '.', 'success');
+  } catch (err) {
+    showToast('Failed to save permissions: ' + (err.message || 'Unknown error'), 'error');
+  }
 }
 """

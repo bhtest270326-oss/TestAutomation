@@ -192,12 +192,15 @@ HTML_TOPBAR = """
       </svg>
       <span class="ap-notif-count" id="ap-notif-count" style="display:none" aria-live="polite">0</span>
     </button>
+    <div class="ap-user-menu">
+      <span class="ap-user-display-name" id="ap-user-display-name">Admin</span>
+      <span class="ap-role-badge ap-role-badge--owner" id="ap-user-role-badge">owner</span>
+    </div>
     <div class="ap-user-badge" id="ap-user-badge" onclick="toggleAdminDropdown(event)" title="Admin menu" role="button" aria-label="Admin menu" aria-expanded="false" aria-haspopup="true" tabindex="0">
       <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" width="16" height="16" aria-hidden="true">
         <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
         <circle cx="12" cy="7" r="4" stroke="currentColor" stroke-width="1.8"/>
       </svg>
-      Admin
       <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" width="12" height="12" style="margin-left:2px;opacity:0.6" aria-hidden="true">
         <polyline points="6,9 12,15 18,9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
@@ -211,7 +214,7 @@ HTML_TOPBAR = """
           Documentation
         </button>
         <hr class="ap-user-dropdown-divider">
-        <button class="ap-user-dropdown-item danger" onclick="adminLogout()" role="menuitem">
+        <button class="ap-user-dropdown-item danger" onclick="userLogout()" role="menuitem">
           <svg viewBox="0 0 24 24" fill="none" width="14" height="14" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><polyline points="16,17 21,12 16,7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><line x1="21" y1="12" x2="9" y2="12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
           Logout
         </button>
@@ -836,6 +839,16 @@ HTML_SECTIONS = """
       </div>
     </div>
   </div>
+
+  <!-- ── User Management (owner only) ── -->
+  <div class="ap-card" id="system-user-mgmt" data-owner-only style="display:none">
+    <div class="ap-text-muted">Loading user management...</div>
+  </div>
+
+  <!-- ── Role Permissions (owner only) ── -->
+  <div class="ap-card" id="system-role-perms" data-owner-only style="display:none">
+    <div class="ap-text-muted">Loading role permissions...</div>
+  </div>
 </section>
 
 <!-- ═══════════════════════════════════════════════ MARKET PRICING ══ -->
@@ -1212,3 +1225,187 @@ HTML_MODALS = """
   </div>
 </div>
 """
+
+HTML_LOGIN_PAGE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign In — Wheel Doctor Control Pro</title>
+<meta name="theme-color" content="#C41230">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0f0f0f;
+    color: #f1f5f9;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .login-card {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 16px;
+    padding: 48px 40px;
+    width: 100%;
+    max-width: 420px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+  }
+  .login-logo {
+    text-align: center;
+    margin-bottom: 32px;
+  }
+  .login-logo-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 56px;
+    height: 56px;
+    background: #C41230;
+    border-radius: 14px;
+    margin-bottom: 16px;
+  }
+  .login-logo-icon svg { color: #fff; }
+  .login-title {
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .login-subtitle {
+    font-size: 14px;
+    color: #64748b;
+  }
+  .login-field {
+    margin-bottom: 20px;
+  }
+  .login-label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: #94a3b8;
+    margin-bottom: 6px;
+  }
+  .login-input {
+    width: 100%;
+    padding: 12px 14px;
+    background: #222;
+    border: 1px solid #444;
+    border-radius: 8px;
+    color: #f1f5f9;
+    font-size: 15px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .login-input:focus {
+    border-color: #C41230;
+  }
+  .login-btn {
+    width: 100%;
+    padding: 12px;
+    background: #C41230;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+    margin-top: 8px;
+  }
+  .login-btn:hover { background: #A00D22; }
+  .login-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+  .login-error {
+    display: none;
+    background: rgba(239,68,68,0.12);
+    border: 1px solid rgba(239,68,68,0.3);
+    color: #ef4444;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    margin-bottom: 16px;
+  }
+  @media (max-width: 480px) {
+    .login-card { padding: 32px 24px; }
+  }
+</style>
+</head>
+<body>
+<div class="login-card">
+  <div class="login-logo">
+    <div class="login-logo-icon">
+      <svg viewBox="0 0 24 24" fill="none" width="28" height="28">
+        <path d="M3 17h1.5a2.5 2.5 0 0 0 5 0h6a2.5 2.5 0 0 0 5 0H22" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M2 9h14l3 5H2V9z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <h1 class="login-title">Wheel Doctor</h1>
+    <p class="login-subtitle">Control Pro</p>
+  </div>
+  <div class="login-error" id="login-error"></div>
+  <form id="login-form" autocomplete="on">
+    <div class="login-field">
+      <label class="login-label" for="login-username">Username</label>
+      <input class="login-input" id="login-username" type="text" name="username" autocomplete="username" required>
+    </div>
+    <div class="login-field">
+      <label class="login-label" for="login-password">Password</label>
+      <input class="login-input" id="login-password" type="password" name="password" autocomplete="current-password" required>
+    </div>
+    <button class="login-btn" id="login-btn" type="submit">Sign In</button>
+  </form>
+</div>
+<script>
+(function() {
+  var form = document.getElementById('login-form');
+  var btn = document.getElementById('login-btn');
+  var errEl = document.getElementById('login-error');
+
+  form.addEventListener('submit', function(e) {
+    e.preventDefault();
+    var username = document.getElementById('login-username').value.trim();
+    var password = document.getElementById('login-password').value;
+
+    if (!username || !password) {
+      errEl.textContent = 'Please enter both username and password.';
+      errEl.style.display = 'block';
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Signing in...';
+    errEl.style.display = 'none';
+
+    fetch('/v2/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: username, password: password }),
+      credentials: 'same-origin'
+    })
+    .then(function(resp) { return resp.json(); })
+    .then(function(data) {
+      if (data.ok) {
+        window.location.href = '/v2/';
+      } else {
+        errEl.textContent = data.error || 'Invalid credentials.';
+        errEl.style.display = 'block';
+        btn.disabled = false;
+        btn.textContent = 'Sign In';
+      }
+    })
+    .catch(function() {
+      errEl.textContent = 'Network error. Please try again.';
+      errEl.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'Sign In';
+    });
+  });
+})();
+</script>
+</body>
+</html>"""

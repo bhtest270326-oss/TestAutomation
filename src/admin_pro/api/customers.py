@@ -11,10 +11,16 @@ from admin_pro.api import api_response
 logger = logging.getLogger(__name__)
 
 
-def register(bp, require_auth):
+def register(bp, require_auth, require_permission=None):
+    if require_permission is None:
+        def require_permission(tab_id, need_edit=False):
+            def decorator(f):
+                return f
+            return decorator
 
     @bp.route("/api/customers", methods=["GET"])
     @require_auth
+    @require_permission('customers')
     def list_customers():
         try:
             # Pagination params
@@ -108,6 +114,7 @@ def register(bp, require_auth):
 
     @bp.route("/api/customers/search", methods=["GET"])
     @require_auth
+    @require_permission('customers')
     def search_customers():
         q = request.args.get("q", "").strip()
         if not q:
@@ -175,6 +182,7 @@ def register(bp, require_auth):
 
     @bp.route("/api/customers/service-history", methods=["GET"])
     @require_auth
+    @require_permission('customers')
     def all_service_history():
         try:
             with _get_conn() as conn:
@@ -196,6 +204,7 @@ def register(bp, require_auth):
 
     @bp.route("/api/customers/<email_b64>", methods=["GET"])
     @require_auth
+    @require_permission('customers')
     def customer_profile(email_b64):
         try:
             # Validate identifier length before decoding
@@ -298,6 +307,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route("/api/gdpr/export/<email_b64>", methods=["GET"])
     @require_auth
+    @require_permission('customers')
     def gdpr_export(email_b64):
         """Export all data held for a customer (GDPR right of access)."""
         try:
@@ -348,6 +358,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route("/api/gdpr/purge/<email_b64>", methods=["POST"])
     @require_auth
+    @require_permission('customers', need_edit=True)
     def gdpr_purge(email_b64):
         """Anonymise all PII for a customer (GDPR right to erasure)."""
         try:
@@ -408,6 +419,6 @@ def register(bp, require_auth):
             return api_response(error="Internal server error", code="INTERNAL_ERROR", status=500)
 
 
-from admin_pro import admin_pro_bp, require_auth  # noqa: E402
+from admin_pro import admin_pro_bp, require_auth, require_permission  # noqa: E402
 
-register(admin_pro_bp, require_auth)
+register(admin_pro_bp, require_auth, require_permission)

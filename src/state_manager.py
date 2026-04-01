@@ -495,6 +495,119 @@ def _ensure_schema(conn):
     except Exception as _e:
         logger.debug("idx_clarifications_thread_unique not created (may already exist): %s", _e)
 
+    # RBAC tables
+    rbac_sql = """
+        CREATE TABLE IF NOT EXISTS admin_users (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            username        TEXT UNIQUE NOT NULL,
+            password_hash   TEXT NOT NULL,
+            display_name    TEXT NOT NULL DEFAULT '',
+            role            TEXT NOT NULL DEFAULT 'technician',
+            is_active       INTEGER NOT NULL DEFAULT 1,
+            totp_secret     TEXT,
+            created_at      TEXT NOT NULL,
+            updated_at      TEXT NOT NULL,
+            last_login_at   TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS admin_roles (
+            role            TEXT PRIMARY KEY,
+            display_name    TEXT NOT NULL,
+            description     TEXT,
+            is_system       INTEGER NOT NULL DEFAULT 0,
+            created_at      TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS role_permissions (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            role            TEXT NOT NULL,
+            tab_id          TEXT NOT NULL,
+            can_view        INTEGER NOT NULL DEFAULT 0,
+            can_edit        INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(role, tab_id)
+        );
+    """
+    for stmt in rbac_sql.strip().split(';'):
+        stmt = stmt.strip()
+        if stmt:
+            try:
+                conn.execute(_q(stmt))
+            except Exception:
+                pass
+    conn.commit()
+
+    _migrate_env_admin_to_db(conn)
+
+
+# ---------------------------------------------------------------------------
+# Default permission matrix for RBAC roles
+# ---------------------------------------------------------------------------
+_DEFAULT_PERMISSIONS = {
+    'owner': {
+        'dashboard': (1, 1), 'activity': (1, 1), 'bookings': (1, 1),
+        'calendar': (1, 1), 'customers': (1, 1), 'comms': (1, 1),
+        'analytics': (1, 1), 'market-pricing': (1, 1), 'quotes': (1, 1),
+        'manual-booking': (1, 1), 'waitlist': (1, 1), 'system': (1, 1),
+    },
+    'user': {
+        'dashboard': (1, 1), 'activity': (1, 1), 'bookings': (1, 1),
+        'calendar': (1, 1), 'customers': (1, 1), 'comms': (1, 1),
+        'analytics': (1, 1), 'market-pricing': (1, 1), 'quotes': (1, 1),
+        'manual-booking': (1, 1), 'waitlist': (1, 1), 'system': (0, 0),
+    },
+    'technician': {
+        'dashboard': (1, 0), 'activity': (1, 0), 'bookings': (1, 1),
+        'calendar': (1, 0), 'customers': (1, 0), 'comms': (0, 0),
+        'analytics': (0, 0), 'market-pricing': (0, 0), 'quotes': (0, 0),
+        'manual-booking': (0, 0), 'waitlist': (0, 0), 'system': (0, 0),
+    },
+}
+
+ALL_TAB_IDS = list(_DEFAULT_PERMISSIONS['owner'].keys())
+
+
+def _migrate_env_admin_to_db(conn):
+    """Create default RBAC roles and owner account from env vars (one-time)."""
+    row = conn.execute(_q("SELECT COUNT(*) AS cnt FROM admin_users")).fetchone()
+    if (row['cnt'] if isinstance(row, dict) else row[0]) > 0:
+        return  # already migrated
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Insert default roles
+    roles_data = [
+        ('owner', 'Owner', 'Full access to all features', 1, now),
+        ('user', 'User', 'Access to most features except System', 1, now),
+        ('technician', 'Technician', 'Limited access: Dashboard, Bookings, Calendar, Customers', 1, now),
+    ]
+    for role, display, desc, is_sys, ts in roles_data:
+        conn.execute(
+            _q("INSERT OR IGNORE INTO admin_roles(role, display_name, description, is_system, created_at) VALUES(?,?,?,?,?)"),
+            (role, display, desc, is_sys, ts)
+        )
+
+    # Insert default permissions
+    for role, tabs in _DEFAULT_PERMISSIONS.items():
+        for tab_id, (cv, ce) in tabs.items():
+            conn.execute(
+                _q("INSERT OR IGNORE INTO role_permissions(role, tab_id, can_view, can_edit) VALUES(?,?,?,?)"),
+                (role, tab_id, cv, ce)
+            )
+
+    # Create owner account from env vars
+    from werkzeug.security import generate_password_hash
+    admin_username = os.environ.get('ADMIN_USERNAME', 'admin')
+    admin_password = os.environ.get('ADMIN_PASSWORD', '')
+    if admin_password:
+        pw_hash = generate_password_hash(admin_password)
+        conn.execute(
+            _q("INSERT OR IGNORE INTO admin_users(username, password_hash, display_name, role, is_active, created_at, updated_at) VALUES(?,?,?,?,?,?,?)"),
+            (admin_username, pw_hash, 'Owner', 'owner', 1, now, now)
+        )
+
+    conn.commit()
+    logger.info("RBAC: migrated env admin credentials to DB, created default roles")
+
 
 def _migrate_from_json(conn):
     """One-time migration from the legacy JSON state file, if it exists."""
@@ -1784,3 +1897,104 @@ class StateManager:
                 'num_competitors': row['num_competitors'],
             })
         return result
+
+    # ------------------------------------------------------------------
+    # RBAC — Admin Users
+    # ------------------------------------------------------------------
+
+    def get_admin_user(self, username):
+        """Return admin user dict by username, or None."""
+        with _get_conn() as conn:
+            row = conn.execute(
+                _q("SELECT * FROM admin_users WHERE username = ?"), (username,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_admin_user_by_id(self, user_id):
+        """Return admin user dict by id, or None."""
+        with _get_conn() as conn:
+            row = conn.execute(
+                _q("SELECT * FROM admin_users WHERE id = ?"), (user_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_admin_users(self):
+        """Return list of all admin user dicts."""
+        with _get_conn() as conn:
+            rows = conn.execute(_q("SELECT * FROM admin_users ORDER BY id")).fetchall()
+            return [dict(r) for r in rows]
+
+    def create_admin_user(self, username, password_hash, display_name, role, totp_secret=None):
+        """Create a new admin user. Returns the new user_id."""
+        now = datetime.now(timezone.utc).isoformat()
+        with _get_conn() as conn:
+            cur = conn.execute(
+                _q("INSERT INTO admin_users(username, password_hash, display_name, role, is_active, totp_secret, created_at, updated_at) VALUES(?,?,?,?,1,?,?,?)"),
+                (username, password_hash, display_name, role, totp_secret, now, now)
+            )
+            conn.commit()
+            return cur.lastrowid
+
+    def update_admin_user(self, user_id, **fields):
+        """Update admin user fields. Returns True if a row was updated."""
+        allowed = {'username', 'password_hash', 'display_name', 'role', 'is_active', 'totp_secret'}
+        updates = {k: v for k, v in fields.items() if k in allowed}
+        if not updates:
+            return False
+        updates['updated_at'] = datetime.now(timezone.utc).isoformat()
+        set_clause = ', '.join(f'{k} = ?' for k in updates)
+        values = list(updates.values()) + [user_id]
+        with _get_conn() as conn:
+            cur = conn.execute(
+                _q(f"UPDATE admin_users SET {set_clause} WHERE id = ?"), values
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def deactivate_admin_user(self, user_id):
+        """Soft-deactivate an admin user. Returns True if updated."""
+        return self.update_admin_user(user_id, is_active=0)
+
+    def update_admin_user_login(self, user_id):
+        """Update last_login_at timestamp for the user."""
+        now = datetime.now(timezone.utc).isoformat()
+        with _get_conn() as conn:
+            conn.execute(
+                _q("UPDATE admin_users SET last_login_at = ? WHERE id = ?"), (now, user_id)
+            )
+            conn.commit()
+
+    # ------------------------------------------------------------------
+    # RBAC — Roles & Permissions
+    # ------------------------------------------------------------------
+
+    def list_roles(self):
+        """Return list of role dicts."""
+        with _get_conn() as conn:
+            rows = conn.execute(_q("SELECT * FROM admin_roles ORDER BY role")).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_role_permissions(self, role):
+        """Return dict like {tab_id: {'can_view': bool, 'can_edit': bool}}."""
+        with _get_conn() as conn:
+            rows = conn.execute(
+                _q("SELECT tab_id, can_view, can_edit FROM role_permissions WHERE role = ?"),
+                (role,)
+            ).fetchall()
+            return {
+                r['tab_id']: {'can_view': bool(r['can_view']), 'can_edit': bool(r['can_edit'])}
+                for r in rows
+            }
+
+    def update_role_permissions(self, role, permissions_dict):
+        """Update permission matrix for a role. permissions_dict: {tab_id: {can_view, can_edit}}."""
+        with _get_conn() as conn:
+            for tab_id, perms in permissions_dict.items():
+                cv = 1 if perms.get('can_view') else 0
+                ce = 1 if perms.get('can_edit') else 0
+                conn.execute(
+                    _q("INSERT OR REPLACE INTO role_permissions(role, tab_id, can_view, can_edit) VALUES(?,?,?,?)"),
+                    (role, tab_id, cv, ce)
+                )
+            conn.commit()
+        return True

@@ -448,9 +448,16 @@ def _demand_heatmap():
 # Blueprint registration
 # ---------------------------------------------------------------------------
 
-def register(bp, require_auth):
+def register(bp, require_auth, require_permission=None):
+    if require_permission is None:
+        def require_permission(tab_id, need_edit=False):
+            def decorator(f):
+                return f
+            return decorator
+
     @bp.route("/api/analytics/overview", methods=["GET"])
     @require_auth
+    @require_permission('analytics')
     def analytics_overview():
         try:
             return _overview()
@@ -460,6 +467,7 @@ def register(bp, require_auth):
 
     @bp.route("/api/analytics/trends", methods=["GET"])
     @require_auth
+    @require_permission('analytics')
     def analytics_trends():
         try:
             return _trends()
@@ -469,6 +477,7 @@ def register(bp, require_auth):
 
     @bp.route("/api/analytics/funnel", methods=["GET"])
     @require_auth
+    @require_permission('analytics')
     def analytics_funnel():
         try:
             return _funnel()
@@ -478,6 +487,7 @@ def register(bp, require_auth):
 
     @bp.route("/api/analytics/suburbs", methods=["GET"])
     @require_auth
+    @require_permission('analytics')
     def analytics_suburbs():
         try:
             return _suburbs()
@@ -487,6 +497,7 @@ def register(bp, require_auth):
 
     @bp.route("/api/analytics/services", methods=["GET"])
     @require_auth
+    @require_permission('analytics')
     def analytics_services():
         try:
             return _services()
@@ -496,6 +507,7 @@ def register(bp, require_auth):
 
     @bp.route("/api/analytics/revenue", methods=["GET"])
     @require_auth
+    @require_permission('analytics')
     def analytics_revenue():
         try:
             return _revenue()
@@ -505,6 +517,7 @@ def register(bp, require_auth):
 
     @bp.route("/api/analytics/heatmap", methods=["GET"])
     @require_auth
+    @require_permission('analytics')
     def analytics_heatmap():
         try:
             return _heatmap()
@@ -514,6 +527,7 @@ def register(bp, require_auth):
 
     @bp.route("/api/analytics/forecast", methods=["GET"])
     @require_auth
+    @require_permission('analytics')
     def analytics_forecast():
         try:
             return _demand_heatmap()
@@ -523,5 +537,5 @@ def register(bp, require_auth):
 
 
 # Self-registration when imported by the admin_pro package
-from admin_pro import admin_pro_bp, require_auth  # noqa: E402
-register(admin_pro_bp, require_auth)
+from admin_pro import admin_pro_bp, require_auth, require_permission  # noqa: E402
+register(admin_pro_bp, require_auth, require_permission)

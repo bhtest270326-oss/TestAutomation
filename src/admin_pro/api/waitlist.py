@@ -14,14 +14,20 @@ from state_manager import StateManager, _get_conn
 logger = logging.getLogger(__name__)
 
 
-def register(bp, require_auth):
+def register(bp, require_auth, require_permission=None):
     """Register all waitlist API routes on *bp* using *require_auth* decorator."""
+    if require_permission is None:
+        def require_permission(tab_id, need_edit=False):
+            def decorator(f):
+                return f
+            return decorator
 
     # ------------------------------------------------------------------
     # GET /api/waitlist — list all waitlist entries (with filtering)
     # ------------------------------------------------------------------
     @bp.route('/api/waitlist', methods=['GET'])
     @require_auth
+    @require_permission('waitlist')
     def list_waitlist():
         try:
             status = request.args.get('status', 'all')
@@ -61,6 +67,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/waitlist', methods=['POST'])
     @require_auth
+    @require_permission('waitlist', need_edit=True)
     def add_to_waitlist():
         try:
             body = request.get_json(force=True, silent=True) or {}
@@ -93,6 +100,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/waitlist/<int:waitlist_id>', methods=['PUT'])
     @require_auth
+    @require_permission('waitlist', need_edit=True)
     def update_waitlist(waitlist_id):
         try:
             body = request.get_json(force=True, silent=True) or {}
@@ -117,6 +125,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/waitlist/<int:waitlist_id>', methods=['DELETE'])
     @require_auth
+    @require_permission('waitlist', need_edit=True)
     def delete_waitlist(waitlist_id):
         try:
             state = StateManager()
@@ -137,6 +146,7 @@ def register(bp, require_auth):
     # ------------------------------------------------------------------
     @bp.route('/api/waitlist/<int:waitlist_id>/offer', methods=['POST'])
     @require_auth
+    @require_permission('waitlist', need_edit=True)
     def offer_waitlist_slot(waitlist_id):
         try:
             body = request.get_json(force=True, silent=True) or {}
@@ -232,5 +242,5 @@ def register(bp, require_auth):
 # ---------------------------------------------------------------------------
 # Self-registration
 # ---------------------------------------------------------------------------
-from admin_pro import admin_pro_bp, require_auth  # noqa: E402
-register(admin_pro_bp, require_auth)
+from admin_pro import admin_pro_bp, require_auth, require_permission  # noqa: E402
+register(admin_pro_bp, require_auth, require_permission)
