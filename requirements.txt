@@ -11,4 +11,4 @@ python-json-logger==4.1.0
 pyotp==2.9.0
 
 # PostgreSQL (optional — only needed if DATABASE_URL is set)
-psycopg2-binary==2.9.11
+psycopg2-binary==2.9.12
